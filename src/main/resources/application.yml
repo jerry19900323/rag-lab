@@ -1,0 +1,11 @@
+spring:
+  application:
+    name: rag-lab
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 5MB
+
+server:
+  port: ${SERVER_PORT:8080}
+
