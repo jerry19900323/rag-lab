@@ -82,7 +82,7 @@ curl http://localhost:8080/api/health
 
 ## Preview Document Chunks
 
-Validates, parses, normalizes, and chunks one TXT or Markdown document. The operation is read-only and does not persist either the document or its chunks.
+Validates, parses, normalizes, and chunks one TXT, Markdown, PDF, DOCX, PPTX, XLSX, or HTML document. The operation is read-only and does not persist either the document or its chunks. PDFs must contain a text layer; OCR for scanned documents is not currently provided. Legacy binary Office formats (`.doc`, `.ppt`, and `.xls`) are not supported.
 
 ### Request
 
@@ -95,7 +95,7 @@ Content-Type: multipart/form-data
 
 | Field | Type | Required | Default | Constraints | Description |
 | --- | --- | --- | --- | --- | --- |
-| `file` | file | Yes | None | Non-empty UTF-8 `.txt`, `.md`, or `.markdown` file; maximum request size is 5 MB. | Document to parse and chunk. |
+| `file` | file | Yes | None | Non-empty `.txt`, `.md`, `.markdown`, `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, or `.htm` file; text formats must be UTF-8 and PDFs must have a text layer; maximum request size is 5 MB. | Document to parse and chunk. |
 | `maxCharacters` | integer | No | `800` | From `100` through `10000`. | Maximum number of UTF-16 characters in one chunk. |
 | `overlapCharacters` | integer | No | `100` | Must be non-negative and smaller than `maxCharacters`. | Requested overlap between adjacent chunks. Natural-boundary whitespace may reduce the effective overlap. |
 
@@ -126,14 +126,20 @@ Status: `200 OK`
       "startOffset": 0,
       "endOffset": 756,
       "characterCount": 756,
-      "content": "# Example document\n\nDocument content..."
+      "content": "# Example document\n\nDocument content...",
+      "sourceReferences": [
+        {"pageNumber": null, "slideNumber": null, "sheetName": null, "sectionTitle": null, "elementType": "TEXT"}
+      ]
     },
     {
       "index": 1,
       "startOffset": 656,
       "endOffset": 1240,
       "characterCount": 584,
-      "content": "Overlapping document content..."
+      "content": "Overlapping document content...",
+      "sourceReferences": [
+        {"pageNumber": null, "slideNumber": null, "sheetName": null, "sectionTitle": null, "elementType": "TEXT"}
+      ]
     }
   ]
 }
@@ -155,6 +161,12 @@ Status: `200 OK`
 | `chunks[].endOffset` | integer | Yes | Exclusive end offset in normalized document content. |
 | `chunks[].characterCount` | integer | Yes | Number of characters in the chunk. |
 | `chunks[].content` | string | Yes | Exact normalized document text within the reported offsets. |
+| `chunks[].sourceReferences` | array | Yes | Deduplicated source structures overlapping the chunk. |
+| `chunks[].sourceReferences[].pageNumber` | integer or null | Yes | One-based PDF page number, or `null` for formats without stable pages. |
+| `chunks[].sourceReferences[].slideNumber` | integer or null | Yes | One-based PowerPoint slide number, or `null` for other formats. |
+| `chunks[].sourceReferences[].sheetName` | string or null | Yes | Excel worksheet name, or `null` for other formats. |
+| `chunks[].sourceReferences[].sectionTitle` | string or null | Yes | Nearest Word heading, when available. |
+| `chunks[].sourceReferences[].elementType` | string | Yes | Source kind such as `TEXT`, `PAGE`, `SLIDE`, `ROW`, `HEADING`, `PARAGRAPH`, `TABLE`, `HTML_BLOCK`, or `TABLE_ROW`. |
 
 ### Chunking Behavior
 
@@ -177,10 +189,12 @@ Possible validation errors include:
 | Condition | Example `error` value |
 | --- | --- |
 | Missing filename | `The uploaded document must have a file name` |
-| Unsupported extension | `Only .txt, .md, and .markdown files are supported` |
+| Unsupported extension | `Only .txt, .md, .markdown, .pdf, .docx, .pptx, .xlsx, .html, and .htm files are supported` |
 | Empty file | `The uploaded document is empty` |
 | Whitespace-only file | `The uploaded document does not contain readable text` |
 | Invalid UTF-8 | `The document must use valid UTF-8 encoding` |
+| Scanned/image-only PDF | `The PDF does not contain readable text; scanned PDFs require OCR` |
+| Encrypted PDF | `Encrypted PDF documents are not supported` |
 | Invalid maximum size | `maxCharacters must be between 100 and 10000` |
 | Invalid overlap | `overlapCharacters must be non-negative and smaller than maxCharacters` |
 

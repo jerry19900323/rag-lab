@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.example.raglab.application.DocumentProcessingService;
 import com.example.raglab.application.StableTextChunker;
 import com.example.raglab.infrastructure.document.TextDocumentParser;
+import com.example.raglab.infrastructure.document.DocumentParserRouter;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,7 +17,8 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(DocumentProcessingController.class)
-@Import({DocumentProcessingService.class, StableTextChunker.class, TextDocumentParser.class, ApiExceptionHandler.class})
+@Import({DocumentProcessingService.class, StableTextChunker.class, DocumentParserRouter.class,
+        TextDocumentParser.class, ApiExceptionHandler.class})
 class DocumentProcessingControllerTest {
 
     @Autowired
@@ -38,6 +40,7 @@ class DocumentProcessingControllerTest {
                 .andExpect(jsonPath("$.documentType").value("MARKDOWN"))
                 .andExpect(jsonPath("$.chunkCount").value(2))
                 .andExpect(jsonPath("$.chunks[0].index").value(0))
+                .andExpect(jsonPath("$.chunks[0].sourceReferences[0].elementType").value("TEXT"))
                 .andExpect(jsonPath("$.chunks[1].index").value(1));
     }
 

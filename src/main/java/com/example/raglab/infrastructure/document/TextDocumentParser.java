@@ -4,14 +4,13 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
-import java.util.Locale;
 import java.util.Set;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
 /** Parses UTF-8 TXT and Markdown files into normalized text. */
 @Component
-public class TextDocumentParser implements DocumentParser {
+public class TextDocumentParser implements DocumentFormatParser {
 
     private static final Set<String> SUPPORTED_EXTENSIONS = Set.of("txt", "md", "markdown");
 
@@ -20,15 +19,13 @@ public class TextDocumentParser implements DocumentParser {
      * Strict decoding prevents silently corrupted document content.
      */
     @Override
-    public ParsedDocument parse(MultipartFile file) {
-        String fileName = sanitizeFileName(file.getOriginalFilename());
-        String extension = extensionOf(fileName);
-        if (!SUPPORTED_EXTENSIONS.contains(extension)) {
-            throw new IllegalArgumentException("Only .txt, .md, and .markdown files are supported");
-        }
-        if (file.isEmpty()) {
-            throw new IllegalArgumentException("The uploaded document is empty");
-        }
+    public boolean supports(String extension) {
+        return SUPPORTED_EXTENSIONS.contains(extension);
+    }
+
+    @Override
+    public ParsedDocument parse(MultipartFile file, String fileName) {
+        String extension = fileName.substring(fileName.lastIndexOf('.') + 1).toLowerCase(java.util.Locale.ROOT);
 
         String content;
         try {
@@ -46,25 +43,14 @@ public class TextDocumentParser implements DocumentParser {
         if (!content.isEmpty() && content.charAt(0) == '\uFEFF') {
             content = content.substring(1);
         }
-        content = content.replace("\r\n", "\n").replace('\r', '\n');
+        content = DocumentParserRouter.normalizeText(content);
         if (content.isBlank()) {
             throw new IllegalArgumentException("The uploaded document does not contain readable text");
         }
 
         String documentType = extension.equals("txt") ? "TEXT" : "MARKDOWN";
-        return new ParsedDocument(fileName, documentType, content);
-    }
-
-    private String sanitizeFileName(String originalFileName) {
-        if (originalFileName == null || originalFileName.isBlank()) {
-            throw new IllegalArgumentException("The uploaded document must have a file name");
-        }
-        String normalized = originalFileName.replace('\\', '/');
-        return normalized.substring(normalized.lastIndexOf('/') + 1);
-    }
-
-    private String extensionOf(String fileName) {
-        int separator = fileName.lastIndexOf('.');
-        return separator < 0 ? "" : fileName.substring(separator + 1).toLowerCase(Locale.ROOT);
+        return new ParsedDocument(fileName, documentType, content,
+                java.util.List.of(new SourceSegment(
+                        0, content.length(), null, null, null, null, "TEXT")));
     }
 }

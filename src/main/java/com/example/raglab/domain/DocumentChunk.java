@@ -1,18 +1,26 @@
 package com.example.raglab.domain;
 
+import java.util.List;
+
 /** A traceable section of normalized document text. */
 public record DocumentChunk(
         int index,
         int startOffset,
         int endOffset,
         int characterCount,
-        String content) {
+        String content,
+        List<SourceReference> sourceReferences) {
+
+    public DocumentChunk(int index, int startOffset, int endOffset, int characterCount, String content) {
+        this(index, startOffset, endOffset, characterCount, content, List.of());
+    }
 
     /**
      * Creates a chunk whose offsets use the half-open interval
      * {@code [startOffset, endOffset)}.
      */
     public DocumentChunk {
+        sourceReferences = List.copyOf(sourceReferences);
         if (index < 0) {
             throw new IllegalArgumentException("Chunk index must not be negative");
         }

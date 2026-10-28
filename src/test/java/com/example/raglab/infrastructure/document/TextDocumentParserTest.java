@@ -9,7 +9,8 @@ import org.springframework.mock.web.MockMultipartFile;
 
 class TextDocumentParserTest {
 
-    private final TextDocumentParser parser = new TextDocumentParser();
+    private final TextDocumentParser formatParser = new TextDocumentParser();
+    private final DocumentParser parser = new DocumentParserRouter(java.util.List.of(formatParser));
 
     /** Verifies BOM removal and platform-independent line normalization. */
     @Test
@@ -26,10 +27,10 @@ class TextDocumentParserTest {
     /** Verifies that file content is never inferred from an unsupported extension. */
     @Test
     void shouldRejectUnsupportedFiles() {
-        var file = new MockMultipartFile("file", "guide.pdf", "application/pdf", "data".getBytes());
+        var file = new MockMultipartFile("file", "guide.exe", "application/octet-stream", "data".getBytes());
 
         assertThatThrownBy(() -> parser.parse(file))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Only .txt, .md, and .markdown");
+                .hasMessageContaining(".pptx, .xlsx, .html, and .htm");
     }
 }

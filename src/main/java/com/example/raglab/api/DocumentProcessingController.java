@@ -21,7 +21,7 @@ public class DocumentProcessingController {
         this.service = service;
     }
 
-    /** Parses and chunks a TXT or Markdown upload for immediate inspection. */
+    /** Parses and chunks a supported text, PDF, or Word upload for immediate inspection. */
     @PostMapping(value = "/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public DocumentProcessingResult preview(
             @RequestParam("file") MultipartFile file,
