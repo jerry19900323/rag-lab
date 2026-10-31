@@ -39,6 +39,38 @@ The preview API returns document statistics and the complete ordered chunk list.
 
 ## API
 
+### Index Document
+
+```http
+POST /api/documents/index
+Content-Type: multipart/form-data
+```
+
+Form fields:
+
+- `file`: a supported document to parse, chunk, and store.
+- `documentId`: optional existing logical document ID. Omit it for a new document.
+- `maxCharacters`: optional maximum chunk size; defaults to 800.
+- `overlapCharacters`: optional overlap; defaults to 100.
+
+Create a new logical document:
+
+```shell
+curl -X POST http://localhost:8080/api/documents/index \
+  -F 'file=@notes.md'
+```
+
+Replace an existing logical document with a new ingestion generation:
+
+```shell
+curl -X POST http://localhost:8080/api/documents/index \
+  -F 'file=@notes-v2.md' \
+  -F 'documentId=the-id-returned-by-the-first-request'
+```
+
+The endpoint returns `201 Created` after every chunk has been committed. A failed Elasticsearch
+write returns `502 Bad Gateway`, and the previous successful document generation is preserved.
+
 ### Preview Document Chunks
 
 ```http
@@ -91,6 +123,22 @@ Example response:
 ```http
 GET /api/health
 ```
+
+Elasticsearch readiness check:
+
+```http
+GET /api/health/elasticsearch
+```
+
+The readiness endpoint returns `200` with an `UP` status when Elasticsearch responds to a ping,
+or `503` with a `DOWN` status and an error message when it is unavailable.
+
+On startup, the service idempotently creates the versioned `rag_chunks_v1` index and attaches
+the stable `rag_chunks` alias. Set `ES_INITIALIZE_INDEX=false` to disable this initialization.
+
+The default Elasticsearch connection uses HTTPS and trusts the local Elasticsearch CA at
+`/opt/elastic/elasticsearch-9.5.5/config/certs/http_ca.crt`. Override it with `ES_CA_CERT`
+using a Spring resource location such as `file:/another/path/http_ca.crt`.
 
 ## Project Structure
 

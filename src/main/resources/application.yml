@@ -1,4 +1,17 @@
 spring:
+  ssl:
+    bundle:
+      pem:
+        elasticsearch:
+          truststore:
+            certificate: ${ES_CA_CERT:file:/opt/elastic/elasticsearch-9.5.5/config/certs/http_ca.crt}
+  elasticsearch:
+    uris: ${ES_URIS:https://localhost:9200}
+    username: ${ES_USERNAME:elastic}
+    password: ${ES_PASSWORD:}
+    restclient:
+      ssl:
+        bundle: elasticsearch
   application:
     name: rag-lab
   servlet:
@@ -8,4 +21,8 @@ spring:
 
 server:
   port: ${SERVER_PORT:8080}
+
+rag:
+  elasticsearch:
+    initialize-index: ${ES_INITIALIZE_INDEX:true}
 
