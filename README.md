@@ -71,6 +71,17 @@ curl -X POST http://localhost:8080/api/documents/index \
 The endpoint returns `201 Created` after every chunk has been committed. A failed Elasticsearch
 write returns `502 Bad Gateway`, and the previous successful document generation is preserved.
 
+### Document Metadata
+
+```http
+GET /api/documents?page=0&size=20
+GET /api/documents/{documentId}
+GET /api/documents/{documentId}/ingestions?page=0&size=20
+```
+
+These endpoints read document status and ingestion history from MySQL. Pages are zero-based and
+may contain at most 100 records.
+
 ### Preview Document Chunks
 
 ```http
@@ -132,6 +143,63 @@ GET /api/health/elasticsearch
 
 The readiness endpoint returns `200` with an `UP` status when Elasticsearch responds to a ping,
 or `503` with a `DOWN` status and an error message when it is unavailable.
+
+MySQL and Redis readiness check:
+
+```http
+GET /api/health/infrastructure
+```
+
+The application uses the `rag_lab` MySQL schema and Redis logical database `1` by default.
+Provide credentials through `DB_PASSWORD` and, only when Redis authentication is enabled,
+`REDIS_PASSWORD`. Flyway applies schema migrations during application startup.
+
+### Authentication
+
+Create an image captcha:
+
+```http
+GET /api/auth/captcha
+```
+
+The response contains a `captchaId`, a PNG `imageDataUri`, and its expiration time. Log in with:
+
+```http
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "your-password",
+  "captchaId": "captcha-id",
+  "captchaCode": "ABCD"
+}
+```
+
+Set `ADMIN_PASSWORD` outside the repository to create the initial administrator on startup.
+`ADMIN_USERNAME` defaults to `admin`, while `CAPTCHA_TTL` and `AUTH_SESSION_TTL` default to
+two minutes and eight hours. Captchas are one-time values and login sessions are stored in Redis.
+
+Use the returned access token for protected APIs:
+
+```http
+Authorization: Bearer session-token
+```
+
+The document APIs and all future non-public `/api` routes require authentication. Health checks,
+captcha creation, and login remain public. The authenticated user and logout endpoints are:
+
+```http
+GET /api/auth/me
+Authorization: Bearer session-token
+
+POST /api/auth/logout
+Authorization: Bearer session-token
+```
+
+Public HTML pages can be previewed or indexed through `POST /api/web-pages/preview` and
+`POST /api/web-pages/index`. Static same-origin pagination is optional and disabled by default.
+See the [API Reference](docs/decisions/api-reference.md) for the complete request and response schema.
 
 On startup, the service idempotently creates the versioned `rag_chunks_v1` index and attaches
 the stable `rag_chunks` alias. Set `ES_INITIALIZE_INDEX=false` to disable this initialization.

@@ -25,8 +25,15 @@ public class DocumentProcessingService {
             MultipartFile file,
             int maxCharacters,
             int overlapCharacters) {
+        return preview(parser.parse(file), maxCharacters, overlapCharacters);
+    }
+
+    /** Chunks already parsed content, preserving its source references. */
+    public DocumentProcessingResult preview(
+            ParsedDocument document,
+            int maxCharacters,
+            int overlapCharacters) {
         ChunkingOptions options = new ChunkingOptions(maxCharacters, overlapCharacters);
-        ParsedDocument document = parser.parse(file);
         var chunks = chunker.chunk(document.content(), options).stream()
                 .map(chunk -> withSourceReferences(chunk, document))
                 .toList();
@@ -46,7 +53,8 @@ public class DocumentProcessingService {
                         && segment.endOffset() > chunk.startOffset())
                 .map(segment -> new SourceReference(
                         segment.pageNumber(), segment.slideNumber(), segment.sheetName(),
-                        segment.sectionTitle(), segment.elementType()))
+                        segment.sectionTitle(), segment.elementType(), segment.sourceUrl(),
+                        segment.sourceTitle(), segment.webPageNumber()))
                 .distinct()
                 .toList();
         return new DocumentChunk(
