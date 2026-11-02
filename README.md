@@ -82,6 +82,10 @@ GET /api/documents/{documentId}/ingestions?page=0&size=20
 These endpoints read document status and ingestion history from MySQL. Pages are zero-based and
 may contain at most 100 records.
 
+Administrators can remove an indexed document and its search chunks with
+`DELETE /api/documents/{documentId}`. The same endpoint handles uploaded files and indexed web
+pages; ingestion history is deleted with the document.
+
 ### Preview Document Chunks
 
 ```http
@@ -225,6 +229,8 @@ environment variables. Keep this key across restarts and do not commit its value
 See the [API Reference](docs/decisions/api-reference.md#administrator-model-settings-api) for
 frontend page behavior and endpoint schemas. These settings are preparatory; model invocation
 in indexing and question answering is a later stage.
+Administrators can remove a saved model connection with
+`DELETE /api/admin/model-connections/{id}`; its purpose assignments are cleared automatically.
 
 On startup, the service idempotently creates the versioned `rag_chunks_v1` index and attaches
 the stable `rag_chunks` alias. Set `ES_INITIALIZE_INDEX=false` to disable this initialization.

@@ -53,10 +53,10 @@ Expected failures use this JSON shape:
 | --- | --- |
 | `400 Bad Request` | Invalid request, captcha, file, chunk settings, or pagination. |
 | `401 Unauthorized` | Missing/invalid session or incorrect username/password. |
-| `404 Not Found` | The requested document does not exist. |
-| `403 Forbidden` | The authenticated user is not an administrator for a model-settings request. |
-| `409 Conflict` | The same logical document is already being indexed. |
-| `502 Bad Gateway` | Elasticsearch failed while storing or searching document chunks. |
+| `403 Forbidden` | The authenticated user is not an administrator for a protected management action. |
+| `404 Not Found` | The requested document or model connection does not exist. |
+| `409 Conflict` | The same logical document is already being indexed or deleted. |
+| `502 Bad Gateway` | Elasticsearch failed while storing, searching, or deleting document chunks. |
 | `503 Service Unavailable` | A health-checked dependency is unavailable. |
 
 ### Pagination
@@ -96,6 +96,7 @@ Offsets refer to normalized content after optional UTF-8 BOM removal and line-en
 | `GET` | `/api/documents` | Bearer | List indexed documents. |
 | `GET` | `/api/documents/{documentId}` | Bearer | Get document metadata. |
 | `GET` | `/api/documents/{documentId}/ingestions` | Bearer | List ingestion attempts. |
+| `DELETE` | `/api/documents/{documentId}` | Admin bearer | Delete an indexed document, its chunks, and ingestion history. |
 | `POST` | `/api/web-pages/preview` | Bearer | Fetch public HTML pages and preview chunks. |
 | `POST` | `/api/web-pages/index` | Bearer | Fetch public HTML pages and persist their chunks. |
 | `GET` | `/api/search` | Bearer | Search indexed chunks by keyword. |
@@ -103,6 +104,7 @@ Offsets refer to normalized content after optional UTF-8 BOM removal and line-en
 | `GET` | `/api/admin/model-connections` | Admin bearer | List saved connections without credentials. |
 | `POST` | `/api/admin/model-connections` | Admin bearer | Save a provider connection. |
 | `PUT` | `/api/admin/model-connections/{id}` | Admin bearer | Edit or disable a connection. |
+| `DELETE` | `/api/admin/model-connections/{id}` | Admin bearer | Delete a connection and clear its purpose assignments. |
 | `GET` | `/api/admin/model-connections/{id}/models` | Admin bearer | Load a live provider model list. |
 | `POST` | `/api/admin/model-connections/{id}/test` | Admin bearer | Test provider catalog access. |
 | `GET` | `/api/admin/model-assignments` | Admin bearer | Read model selection for each purpose. |
@@ -491,6 +493,73 @@ Status: `200 OK`
 `errorMessage` and `completedAt` can be `null` while processing. `errorMessage` can contain a safe
 failure summary when status is `FAILED`.
 
+### Delete an Indexed Document
+
+Deletes one logical document, all of its indexed chunks, and its MySQL ingestion history. This
+works for both uploaded files and indexed web pages. The service does not retain original upload
+bytes, so there is no separate stored source file to remove. The request requires an active
+administrator session (`user.role === "ADMIN"`).
+
+```http
+DELETE /api/documents/{documentId}
+Authorization: Bearer <adminAccessToken>
+```
+
+`documentId` is the exact ID returned by `POST /api/documents/index`,
+`POST /api/web-pages/index`, or `GET /api/documents`. It must contain 1–200 characters. Do not
+send an ingestion ID, filename, or web URL in its place. The request has no body.
+
+Status: `204 No Content` after the search chunks and metadata are removed. The response body is
+empty. Subsequent `GET /api/documents/{documentId}` returns `404`, and its chunks no longer
+appear in `/api/search`.
+
+| Status | Condition | Frontend behavior |
+| --- | --- | --- |
+| `401` | No valid login session. | Return to login. |
+| `403` | The user is not an administrator. | Hide the delete action; show access denied if attempted directly. |
+| `404` | The document no longer exists. | Refresh the list and remove the stale row. |
+| `409` | The document is being indexed or another delete holds its lock. | Keep the row and offer retry after the operation ends. |
+| `502` | Elasticsearch did not delete all chunks. | Keep the row and show the error; metadata is retained so the request can be retried. |
+| `503` | MySQL could not delete metadata after search chunks were removed. | Keep the row and retry later. Repeating the delete is safe: chunk deletion is idempotent. |
+
+Error bodies use `{"error":"..."}`. For example, a search-index deletion failure returns
+`{"error":"The document could not be deleted from the search index"}`. A successful delete
+is permanent from this service; uploading the same file again creates a new document unless
+the client explicitly supplies the same `documentId`.
+
+**Frontend placement and interaction:**
+
+| Page | When to show Delete | On confirm | On success |
+| --- | --- | --- | --- |
+| Document upload page | After indexing returns `201` and a `documentId`, show Delete on the indexed result card or its document list row. | Show the filename and a permanent-deletion warning; disable the button while the request runs. | Clear the indexed result and refresh the document list/count. |
+| Document management list or detail | For an indexed document row/detail viewed by an administrator. | Use that row's `documentId`; preserve current filter/page while loading. | Refresh the list; if the current page becomes empty, move to the previous page. Close a deleted detail view. |
+| Search results | Only if that page intentionally offers document management actions. | Explain that deleting one document removes all its search hits. | Refresh the results for the same query. |
+| Web page import result/list | After web indexing returns `201` with `document.documentId`. | Explain that this removes the local index and metadata, not the remote website. | Remove the imported item and refresh document/search lists. |
+
+For a file merely selected in the browser, or a `POST /api/documents/preview` result, a
+“Remove file” action only clears local form state; it must **not** call this API because no
+indexed document exists. The same applies to `POST /api/web-pages/preview`.
+
+Example frontend call after confirmation:
+
+```javascript
+const response = await fetch(`/api/documents/${encodeURIComponent(documentId)}`, {
+  method: "DELETE",
+  headers: { Authorization: `Bearer ${accessToken}` },
+});
+if (response.status === 204) {
+  // Clear the indexed result, then refetch the current document list/search results.
+} else {
+  const { error } = await response.json();
+  // Keep the item visible and display error; handle 401/403/404 as described above.
+}
+```
+
+```shell
+curl -X DELETE http://localhost:8080/api/documents/company-handbook \
+  -H 'Authorization: Bearer session-token'
+```
+
 ### Document Validation Errors
 
 Preview and indexing can return `400 Bad Request` for these conditions:
@@ -646,8 +715,9 @@ Build a **Model Settings** page visible to users whose login or `/api/auth/me` r
 The page has two areas:
 
 1. **Connections:** list saved providers, add a connection, edit its name or key, enable/disable
-   it, load its available models, and test catalog access. Show `hasApiKey` as “configured” or
-   “missing”; never expect the API to return the key itself.
+   or delete it, load its available models, and test catalog access. Show `hasApiKey` as
+   “configured” or “missing”; never expect the API to return the key itself. Show a Delete action
+   on every saved connection row, with a confirmation dialog.
 2. **Purpose assignments:** three selectors, `ANSWER` (answer generation), `EMBEDDING` (vector
    generation and search), and `ROUTING` (model-assisted routing). Each selector offers “Not
    configured” and the enabled connections that support that purpose. After selecting a
@@ -769,12 +839,58 @@ shape. Status: `200 OK`; the response is the updated safe connection object. Sen
 or omit it to retain the stored key. Send a new key to replace it. If `enabled` is omitted on
 update, its previous value is retained. The `provider` must remain the original provider;
 create a new connection to switch providers. Set `enabled: false` to disable a connection.
-There is no delete endpoint in this stage.
 
 ```shell
 curl -X PUT http://localhost:8080/api/admin/model-connections/3e246d55-2b69-4e13-88bb-8e31dd479e7d \
   -H 'Authorization: Bearer session-token' -H 'Content-Type: application/json' \
   -d '{"name":"Main OpenAI account","provider":"OPENAI","enabled":false}'
+```
+
+### Delete a model connection
+
+```http
+DELETE /api/admin/model-connections/{id}
+Authorization: Bearer <adminAccessToken>
+```
+
+`id` is the `connectionId` from `GET /api/admin/model-connections`. The request has no body.
+Status: `204 No Content`, with an empty body. The connection and its encrypted API key are
+removed from MySQL. Any `ANSWER`, `EMBEDDING`, or `ROUTING` assignment referencing this
+connection is cleared in the same database transaction; those assignments remain in the list
+with `connectionId: null` and `modelId: null`. Other connections and assignments are unchanged.
+This deletes **our saved connection only**; it does not revoke the provider API key at the
+provider or delete any remote model.
+
+On the AI configuration page, display Delete beside each saved connection. Before calling it,
+find matching entries in `GET /api/admin/model-assignments` and show their purpose names in the
+confirmation dialog, for example: “Deleting Main OpenAI account will also clear ANSWER and
+ROUTING.” Disable the row's actions during the request. After `204`, remove the row, clear the
+selected connection and model dropdown, and refetch assignments so each affected purpose shows
+“Not configured.” If the request fails, keep the row and selections unchanged.
+
+| Status | Condition | Frontend behavior |
+| --- | --- | --- |
+| `401` | No valid login session. | Return to login. |
+| `403` | Logged-in user is not an administrator. | Hide Model Settings or show access denied. |
+| `404` | The connection was already removed. | Refresh connections and assignments. |
+| `503` | MySQL could not complete deletion. | Keep the row and offer retry; assignment clearing is rolled back. |
+
+```javascript
+const response = await fetch(`/api/admin/model-connections/${encodeURIComponent(connectionId)}`, {
+  method: "DELETE",
+  headers: { Authorization: `Bearer ${accessToken}` },
+});
+if (response.status === 204) {
+  // Refetch connections and purpose assignments; clear the selected model dropdown.
+} else {
+  const { error } = await response.json();
+  // Keep the row visible and display error.
+}
+```
+
+```shell
+curl -X DELETE http://localhost:8080/api/admin/model-connections/3e246d55-2b69-4e13-88bb-8e31dd479e7d \
+  -H 'Authorization: Bearer session-token'
 ```
 
 ### Refresh models and test catalog access
@@ -871,7 +987,7 @@ curl http://localhost:8080/api/admin/model-assignments \
 | `403` | Logged-in user is not `ADMIN`. | Hide Model Settings and show an access-denied state if opened directly. |
 | `404` | A connection ID no longer exists. | Refresh the connection list and clear the selection. |
 | `502` | The provider model catalog could not be loaded or tested. | Show a retry action; allow manual model ID input when appropriate. |
-| `503` | The server encryption key is absent or cannot decrypt a stored credential. | Show a server-configuration error; do not ask the user to repeatedly enter the key. |
+| `503` | The server encryption key is absent, cannot decrypt a stored credential, or MySQL could not delete a connection. | Show the returned error; keep the row on delete failure. |
 
 All errors use `{"error":"..."}`. Example calls:
 

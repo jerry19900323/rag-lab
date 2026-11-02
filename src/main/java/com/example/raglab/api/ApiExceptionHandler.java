@@ -1,14 +1,18 @@
 package com.example.raglab.api;
 
 import com.example.raglab.application.DocumentIndexingConflictException;
+import com.example.raglab.application.DocumentDeletionConflictException;
+import com.example.raglab.application.DocumentMetadataDeleteException;
 import com.example.raglab.application.AdminRequiredException;
 import com.example.raglab.application.ModelCatalogException;
 import com.example.raglab.application.ModelConfigurationUnavailableException;
 import com.example.raglab.application.ModelConnectionNotFoundException;
+import com.example.raglab.application.ModelConnectionDeleteException;
 import com.example.raglab.application.DocumentNotFoundException;
 import com.example.raglab.application.InvalidCaptchaException;
 import com.example.raglab.application.InvalidCredentialsException;
 import com.example.raglab.infrastructure.elasticsearch.ChunkStoreException;
+import com.example.raglab.infrastructure.elasticsearch.ChunkDeleteException;
 import com.example.raglab.infrastructure.elasticsearch.ChunkSearchException;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -30,6 +34,12 @@ public class ApiExceptionHandler {
     @ResponseStatus(HttpStatus.NOT_FOUND)
     public Map<String, String> handleModelConnectionNotFound(ModelConnectionNotFoundException exception) {
         return Map.of("error", exception.getMessage());
+    }
+
+    @ExceptionHandler(ModelConnectionDeleteException.class)
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    public Map<String, String> handleModelConnectionDeleteFailure(ModelConnectionDeleteException exception) {
+        return Map.of("error", "The model connection could not be deleted; retry the request");
     }
 
     @ExceptionHandler(ModelCatalogException.class)
@@ -58,6 +68,18 @@ public class ApiExceptionHandler {
         return Map.of("error", "The document could not be stored in the search index");
     }
 
+    @ExceptionHandler(ChunkDeleteException.class)
+    @ResponseStatus(HttpStatus.BAD_GATEWAY)
+    public Map<String, String> handleChunkDeleteFailure(ChunkDeleteException exception) {
+        return Map.of("error", "The document could not be deleted from the search index");
+    }
+
+    @ExceptionHandler(DocumentMetadataDeleteException.class)
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    public Map<String, String> handleDocumentMetadataDeleteFailure(DocumentMetadataDeleteException exception) {
+        return Map.of("error", "The document metadata could not be deleted; retry the request");
+    }
+
     @ExceptionHandler(ChunkSearchException.class)
     @ResponseStatus(HttpStatus.BAD_GATEWAY)
     public Map<String, String> handleChunkSearchFailure(ChunkSearchException exception) {
@@ -68,6 +90,12 @@ public class ApiExceptionHandler {
     @ExceptionHandler(DocumentIndexingConflictException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     public Map<String, String> handleIndexingConflict(DocumentIndexingConflictException exception) {
+        return Map.of("error", exception.getMessage());
+    }
+
+    @ExceptionHandler(DocumentDeletionConflictException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public Map<String, String> handleDeletionConflict(DocumentDeletionConflictException exception) {
         return Map.of("error", exception.getMessage());
     }
 
