@@ -38,6 +38,8 @@ server:
   port: ${SERVER_PORT:8080}
 
 rag:
+  model-config:
+    encryption-key: ${MODEL_CONFIG_ENCRYPTION_KEY:}
   elasticsearch:
     initialize-index: ${ES_INITIALIZE_INDEX:true}
   indexing:

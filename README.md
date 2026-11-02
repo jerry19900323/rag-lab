@@ -201,6 +201,31 @@ Public HTML pages can be previewed or indexed through `POST /api/web-pages/previ
 `POST /api/web-pages/index`. Static same-origin pagination is optional and disabled by default.
 See the [API Reference](docs/decisions/api-reference.md) for the complete request and response schema.
 
+Search indexed chunks by keyword, optionally within one document:
+
+```shell
+curl -G http://localhost:8080/api/search \
+  -H 'Authorization: Bearer session-token' \
+  --data-urlencode 'query=access policy' \
+  --data-urlencode 'documentId=company-handbook'
+```
+
+Results include relevance scores, chunk text, offsets, and source references for citations.
+
+### Model Settings
+
+Administrators can configure provider connections and select models for answer generation,
+embeddings, and routing through `/api/admin/model-*`. The initial presets are OpenAI, DeepSeek,
+Alibaba Cloud Model Studio (international), Claude, Gemini, and local Ollama. Model dropdown
+options come from the providers' live model-list APIs. Set `MODEL_CONFIG_ENCRYPTION_KEY` to a
+base64-encoded 32-byte key before saving provider API keys; `application.yml` reads this
+environment variable through `rag.model-config.encryption-key`. In IntelliJ IDEA, add
+`MODEL_CONFIG_ENCRYPTION_KEY=<generated-value>` to the application's Run Configuration
+environment variables. Keep this key across restarts and do not commit its value.
+See the [API Reference](docs/decisions/api-reference.md#administrator-model-settings-api) for
+frontend page behavior and endpoint schemas. These settings are preparatory; model invocation
+in indexing and question answering is a later stage.
+
 On startup, the service idempotently creates the versioned `rag_chunks_v1` index and attaches
 the stable `rag_chunks` alias. Set `ES_INITIALIZE_INDEX=false` to disable this initialization.
 
