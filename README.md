@@ -229,6 +229,8 @@ environment variables. Keep this key across restarts and do not commit its value
 See the [API Reference](docs/decisions/api-reference.md#administrator-model-settings-api) for
 frontend page behavior and endpoint schemas. These settings are preparatory; model invocation
 in indexing and question answering is a later stage.
+The add-model form selects one usage type and one model. Each usage type has one saved model;
+the runtime resolver looks up that type and skips missing or disabled connections.
 Administrators can remove a saved model connection with
 `DELETE /api/admin/model-connections/{id}`; its purpose assignments are cleared automatically.
 

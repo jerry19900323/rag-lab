@@ -30,6 +30,12 @@ public class ModelSettingsService {
                 .toList();
     }
 
+    public List<ModelUsageTypeView> usageTypes() {
+        return Arrays.stream(ModelPurpose.values())
+                .map(purpose -> new ModelUsageTypeView(purpose, purpose.displayName()))
+                .toList();
+    }
+
     public List<ModelConnectionView> connections() {
         return store.listConnections().stream().map(ModelConnection::view).toList();
     }
@@ -151,4 +157,5 @@ public class ModelSettingsService {
 
     public record ModelConnectionTestResult(String status, int discoveredModelCount) {
     }
+
 }

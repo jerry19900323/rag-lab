@@ -1,5 +1,6 @@
 package com.example.raglab.application;
 
+import java.util.Arrays;
 import java.util.List;
 
 /** Supported connection presets and their known role capabilities. */
@@ -30,12 +31,22 @@ public enum ModelProvider {
     public boolean requiresApiKey() { return requiresApiKey; }
 
     public List<ModelPurpose> supportedPurposes() {
-        return embedding
-                ? List.of(ModelPurpose.ANSWER, ModelPurpose.EMBEDDING, ModelPurpose.ROUTING)
-                : List.of(ModelPurpose.ANSWER, ModelPurpose.ROUTING);
+        return Arrays.stream(ModelPurpose.values())
+                .filter(purpose -> switch (purpose) {
+                    case ANSWER, CHAT, ROUTING, QUERY_REWRITE, DOCUMENT_SUMMARY,
+                            INFORMATION_EXTRACTION, TRANSLATION, EMBEDDING -> true;
+                    default -> false;
+                })
+                .filter(this::supports)
+                .toList();
     }
 
     public boolean supports(ModelPurpose purpose) {
-        return purpose == ModelPurpose.EMBEDDING ? embedding : chat;
+        return switch (purpose) {
+            case EMBEDDING -> embedding;
+            case ANSWER, CHAT, ROUTING, QUERY_REWRITE, DOCUMENT_SUMMARY,
+                    INFORMATION_EXTRACTION, TRANSLATION -> chat;
+            default -> true;
+        };
     }
 }

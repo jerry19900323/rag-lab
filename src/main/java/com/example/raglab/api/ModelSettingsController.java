@@ -9,6 +9,7 @@ import com.example.raglab.application.ModelConnectionView;
 import com.example.raglab.application.ModelOption;
 import com.example.raglab.application.ModelPurpose;
 import com.example.raglab.application.ModelSettingsService;
+import com.example.raglab.application.ModelUsageTypeView;
 import com.example.raglab.infrastructure.auth.BearerAuthenticationFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
@@ -38,6 +39,12 @@ public class ModelSettingsController {
     public List<ModelSettingsService.ModelProviderView> providers(HttpServletRequest request) {
         requireAdmin(request);
         return service.providers();
+    }
+
+    @GetMapping("/model-usage-types")
+    public List<ModelUsageTypeView> usageTypes(HttpServletRequest request) {
+        requireAdmin(request);
+        return service.usageTypes();
     }
 
     @GetMapping("/model-connections")

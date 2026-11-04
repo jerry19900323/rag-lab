@@ -10,5 +10,6 @@ public interface ModelConnectionStore {
     void saveConnection(ModelConnection connection);
     void deleteConnection(String id);
     List<ModelAssignment> listAssignments();
+    Optional<ModelAssignment> findAssignment(ModelPurpose purpose);
     void saveAssignment(ModelAssignment assignment);
 }

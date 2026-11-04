@@ -63,13 +63,19 @@ public class JdbcModelConnectionStore implements ModelConnectionStore {
 
     @Override
     public List<ModelAssignment> listAssignments() {
-        return jdbc.query("SELECT * FROM rag_model_assignments ORDER BY purpose", this::assignment);
+        return jdbc.query("SELECT * FROM rag_model_assignments ORDER BY usage_type", this::assignment);
+    }
+
+    @Override
+    public Optional<ModelAssignment> findAssignment(ModelPurpose purpose) {
+        return jdbc.query("SELECT * FROM rag_model_assignments WHERE usage_type = ?",
+                this::assignment, purpose.name()).stream().findFirst();
     }
 
     @Override
     public void saveAssignment(ModelAssignment assignment) {
         jdbc.update("""
-                INSERT INTO rag_model_assignments (purpose, connection_id, model_id, updated_at)
+                INSERT INTO rag_model_assignments (usage_type, connection_id, model_id, updated_at)
                 VALUES (?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE connection_id = VALUES(connection_id),
                     model_id = VALUES(model_id), updated_at = VALUES(updated_at)
@@ -85,7 +91,7 @@ public class JdbcModelConnectionStore implements ModelConnectionStore {
     }
 
     private ModelAssignment assignment(ResultSet row, int ignored) throws SQLException {
-        return new ModelAssignment(ModelPurpose.valueOf(row.getString("purpose")),
+        return new ModelAssignment(ModelPurpose.valueOf(row.getString("usage_type")),
                 row.getString("connection_id"), row.getString("model_id"),
                 row.getTimestamp("updated_at").toInstant());
     }

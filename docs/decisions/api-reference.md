@@ -101,6 +101,7 @@ Offsets refer to normalized content after optional UTF-8 BOM removal and line-en
 | `POST` | `/api/web-pages/index` | Bearer | Fetch public HTML pages and persist their chunks. |
 | `GET` | `/api/search` | Bearer | Search indexed chunks by keyword. |
 | `GET` | `/api/admin/model-providers` | Admin bearer | List supported provider presets and purposes. |
+| `GET` | `/api/admin/model-usage-types` | Admin bearer | List selectable model usage types. |
 | `GET` | `/api/admin/model-connections` | Admin bearer | List saved connections without credentials. |
 | `POST` | `/api/admin/model-connections` | Admin bearer | Save a provider connection. |
 | `PUT` | `/api/admin/model-connections/{id}` | Admin bearer | Edit or disable a connection. |
@@ -718,27 +719,39 @@ The page has two areas:
    or delete it, load its available models, and test catalog access. Show `hasApiKey` as
    “configured” or “missing”; never expect the API to return the key itself. Show a Delete action
    on every saved connection row, with a confirmation dialog.
-2. **Purpose assignments:** three selectors, `ANSWER` (answer generation), `EMBEDDING` (vector
-   generation and search), and `ROUTING` (model-assisted routing). Each selector offers “Not
-   configured” and the enabled connections that support that purpose. After selecting a
-   connection, load its model list and choose a model ID. Allow manual model ID entry when the
-   provider catalog is incomplete or unavailable; label such a selection as unverified.
+2. **Add or change a model:** choose one usage type, an enabled connection, and one model ID.
+   Save with `PUT /api/admin/model-assignments/{purpose}`. Each usage type has one selected
+   model; saving another model for the same type replaces it. Show the current selections from
+   `GET /api/admin/model-assignments`. To remove one selection, send both IDs as `null` through
+   that same `PUT` endpoint. Allow manual model ID entry when the catalog is incomplete or
+   unavailable, and label it as unverified.
 
-On page load, request `/api/admin/model-providers`, `/api/admin/model-connections`, and
-`/api/admin/model-assignments`. The provider dropdown is populated from the first response,
-not a hard-coded frontend list. The model dropdown is loaded **after** a connection is saved,
-using its ID and `GET .../models`; “Refresh models” calls that endpoint again. Model lists are
+The add flow uses these calls in order:
+
+1. If the provider connection does not exist yet, save its name, provider, and API key with
+   `POST /api/admin/model-connections`. Keep the returned `connectionId`. If it already exists,
+   select its `connectionId` from `GET /api/admin/model-connections`.
+2. Call `GET /api/admin/model-connections/{id}/models` for that connection and choose a `modelId`.
+   The form also lets the administrator enter a model ID manually.
+3. Choose **one** `usageType` from `GET /api/admin/model-usage-types`. Send the connection ID and
+   model ID to `PUT /api/admin/model-assignments/{usageType}`. The usage code belongs in the URL,
+   not in the JSON body or the connection-creation request.
+4. Refresh `GET /api/admin/model-assignments` and display the saved model next to its usage type.
+   If that type already has a model, explain that saving will replace the existing selection.
+
+On page load, request `/api/admin/model-providers`, `/api/admin/model-usage-types`,
+`/api/admin/model-connections`, and `/api/admin/model-assignments`. Populate provider and usage
+dropdowns from the responses. The model dropdown is loaded **after** a connection is saved,
+using its ID and `GET /api/admin/model-connections/{id}/models`; “Refresh models” calls that endpoint again. Model lists are
 queried live and may change. The response is not a promise that a particular model supports
 every purpose; `supportedPurposes` describes the provider protocol, not each individual model.
 The “Test connection” button tests access to the model catalog and displays `UP` plus the
 number of discovered models. It does **not** invoke the selected chat or embedding model.
 
-This stage stores settings and assignments only. It does not yet invoke a model for document
-indexing, vector search, routing, or answer generation. Until those workflows are implemented,
-the existing document indexing and keyword search behavior is unchanged. An unassigned purpose
-is represented by `connectionId: null` and `modelId: null`; future workflows must skip that
-model step. Disabling a connection preserves its assignments for display, but future workflows
-must not use it while disabled.
+Each selected usage is stored as one row in `rag_model_assignments`, with `usage_type` as the
+primary key. The backend resolves a model by that exact usage and ignores an unassigned or
+disabled connection. Current indexing and search do not invoke a model yet; saving a selection
+does not start an AI workflow.
 
 ### Server setup and provider presets
 
@@ -755,14 +768,14 @@ directly or stores the key in browser storage.
 
 The initial provider presets are:
 
-| `provider` | Page label | Catalog source | Supported purpose types | API key |
+| `provider` | Page label | Catalog source | Known model protocols | API key |
 | --- | --- | --- | --- | --- |
-| `OPENAI` | OpenAI | OpenAI models API | `ANSWER`, `EMBEDDING`, `ROUTING` | Required |
-| `DEEPSEEK` | DeepSeek | DeepSeek models API | `ANSWER`, `ROUTING` | Required |
-| `DASHSCOPE` | Alibaba Cloud Model Studio (international) | International Model Studio models API | `ANSWER`, `EMBEDDING`, `ROUTING` | Required |
-| `ANTHROPIC` | Claude | Anthropic models API | `ANSWER`, `ROUTING` | Required |
-| `GEMINI` | Gemini | Gemini models API | `ANSWER`, `EMBEDDING`, `ROUTING` | Required |
-| `OLLAMA` | Ollama (local) | `127.0.0.1:11434/api/tags` on the backend host | `ANSWER`, `EMBEDDING`, `ROUTING` | Not used |
+| `OPENAI` | OpenAI | OpenAI models API | Chat, text embedding | Required |
+| `DEEPSEEK` | DeepSeek | DeepSeek models API | Chat | Required |
+| `DASHSCOPE` | Alibaba Cloud Model Studio (international) | International Model Studio models API | Chat, text embedding | Required |
+| `ANTHROPIC` | Claude | Anthropic models API | Chat | Required |
+| `GEMINI` | Gemini | Gemini models API | Chat, text embedding | Required |
+| `OLLAMA` | Ollama (local) | `127.0.0.1:11434/api/tags` on the backend host | Chat, text embedding | Not used |
 
 The Model Studio preset uses the **international** catalog. Its API key must be valid for that
 region. The Ollama preset connects to the **backend server's** localhost, not the browser's
@@ -784,12 +797,35 @@ Status: `200 OK`. The response is an array; one entry looks like:
   "provider": "OPENAI",
   "displayName": "OpenAI",
   "requiresApiKey": true,
-  "supportedPurposes": ["ANSWER", "EMBEDDING", "ROUTING"]
+  "supportedPurposes": ["ANSWER", "CHAT", "ROUTING", "QUERY_REWRITE", "DOCUMENT_SUMMARY", "INFORMATION_EXTRACTION", "TRANSLATION", "EMBEDDING"]
 }
 ```
 
-Use `provider` as the form value and `displayName` as its visible label. Filter the purpose
-selectors using `supportedPurposes`.
+Use `provider` as the form value and `displayName` as its visible label. `supportedPurposes`
+reports known chat and text embedding protocol support. Do not hide other values returned by
+`GET /api/admin/model-usage-types` just because they are absent from `supportedPurposes`; their
+provider and individual model support is unverified.
+
+### List usage types for the add-model form
+
+```http
+GET /api/admin/model-usage-types
+Authorization: Bearer <adminAccessToken>
+```
+
+Status: `200 OK`. Returns `[{"usageType":"ANSWER","displayName":"Document answers"}, ...]`.
+Use `usageType` as the selection value and `displayName` as its label. The available values are
+`ANSWER`, `CHAT`, `ROUTING`, `QUERY_REWRITE`, `DOCUMENT_SUMMARY`, `INFORMATION_EXTRACTION`,
+`TRANSLATION`, `EMBEDDING`, `MULTIMODAL_EMBEDDING`, `RERANK`, `VISION`, `OCR`,
+`SPEECH_TO_TEXT`, `TEXT_TO_SPEECH`, `IMAGE_GENERATION`, and `VIDEO_GENERATION`.
+Only one usage type is selected when saving a model. A type in this list is a configuration
+option; it does not mean its runtime workflow is implemented or that the selected model supports
+it.
+
+```shell
+curl http://localhost:8080/api/admin/model-usage-types \
+  -H 'Authorization: Bearer session-token'
+```
 
 ### List, create, and edit connections
 
@@ -855,7 +891,7 @@ Authorization: Bearer <adminAccessToken>
 
 `id` is the `connectionId` from `GET /api/admin/model-connections`. The request has no body.
 Status: `204 No Content`, with an empty body. The connection and its encrypted API key are
-removed from MySQL. Any `ANSWER`, `EMBEDDING`, or `ROUTING` assignment referencing this
+removed from MySQL. Any usage assignment referencing this
 connection is cleared in the same database transaction; those assignments remain in the list
 with `connectionId: null` and `modelId: null`. Other connections and assignments are unchanged.
 This deletes **our saved connection only**; it does not revoke the provider API key at the
@@ -941,8 +977,8 @@ GET /api/admin/model-assignments
 Authorization: Bearer <adminAccessToken>
 ```
 
-Status: `200 OK`. Always returns one item for each of `ANSWER`, `EMBEDDING`, and `ROUTING`.
-With no configuration, the response is:
+Status: `200 OK`. Returns one item for every code in `GET /api/admin/model-usage-types`.
+With no configuration, all items have null selection fields. A sample of the response is:
 
 ```json
 [
@@ -952,7 +988,12 @@ With no configuration, the response is:
 ]
 ```
 
-Bind a model after choosing a connection and model ID:
+The real response includes the remaining usage types as well. `purpose` here is the same code
+named `usageType` in the dropdown response. Each code appears once, so the page can display one
+model per type. A row with `connectionId: null` and `modelId: null` means “Not configured.”
+
+In the add-model form, bind the selected model to the selected usage type. Replace `ANSWER` in
+the path with the chosen `usageType`:
 
 ```http
 PUT /api/admin/model-assignments/ANSWER
@@ -962,13 +1003,41 @@ Content-Type: application/json
 {"connectionId":"3e246d55-2b69-4e13-88bb-8e31dd479e7d","modelId":"provider-model-id"}
 ```
 
-Status: `200 OK`; returns the saved assignment with an `updatedAt` timestamp. To select “Not
-configured”, send `{"connectionId":null,"modelId":null}` to the same path. Both fields must
-be set or both null. `modelId` is trimmed and limited to 200 characters. A connection must exist,
-be enabled, and support the requested purpose. The backend checks the provider's general purpose
-support, but does not verify the individual model's capability at assignment time. For example,
-selecting an OpenAI chat model under `EMBEDDING` may fail when vector workflows are added; the
-page should prefer known embedding choices and display manual entries as unverified.
+Status: `200 OK`; returns the saved assignment, for example
+`{"purpose":"ANSWER","connectionId":"3e246d55-2b69-4e13-88bb-8e31dd479e7d","modelId":"provider-model-id","updatedAt":"2026-11-04T08:00:00Z"}`.
+The database stores the selected code in `rag_model_assignments.usage_type`. That column is the
+primary key, so saving the same type again replaces its previous model. The frontend should show
+the current assignment before replacing it, then refresh `GET /api/admin/model-assignments`.
+
+To remove the selected model for one type, send `{"connectionId":null,"modelId":null}` to the
+same path and refresh the list. This clears the selection for that usage type; it does not delete
+the provider connection or remote model. Both fields must be set or both null. `modelId` is trimmed and
+limited to 200 characters. A connection must exist and be enabled. Known chat and text embedding
+provider restrictions are checked; other type and individual model support is not verified with
+an inference request. Show manual model IDs as unverified.
+
+For example, the frontend can send the selected usage and model like this:
+
+```javascript
+const response = await fetch(
+  `/api/admin/model-assignments/${encodeURIComponent(usageType)}`,
+  {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ connectionId, modelId }),
+  },
+);
+if (!response.ok) {
+  const { error } = await response.json();
+  throw new Error(error);
+}
+// Refetch GET /api/admin/model-assignments to update the page.
+```
+
+For a Remove action, send the same request with both `connectionId` and `modelId` set to `null`.
 
 ```shell
 curl http://localhost:8080/api/admin/model-connections \
