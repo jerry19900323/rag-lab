@@ -12,7 +12,7 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
-/** Reads models from fixed provider catalog endpoints, never from a client-supplied URL. */
+/** Reads model catalogs through the configured provider endpoint. */
 @Component
 public class ModelCatalogClient {
 
@@ -28,9 +28,16 @@ public class ModelCatalogClient {
         client = RestClient.builder().requestFactory(factory).build();
     }
 
-    public List<ModelOption> listModels(ModelProvider provider, String apiKey) {
+    public List<ModelOption> listModels(ModelProvider provider, String apiKey, String apiBaseUrl) {
+        return listModels(provider, apiKey, apiBaseUrl, null);
+    }
+
+    public List<ModelOption> listModels(ModelProvider provider, String apiKey, String apiBaseUrl, String accountId) {
         try {
-            RestClient.RequestHeadersSpec<?> request = client.get().uri(provider.catalogUrl());
+            String url = provider == ModelProvider.CLOUDFLARE
+                    ? "https://api.cloudflare.com/client/v4/accounts/" + accountId + "/ai/models/search"
+                    : provider.catalogUrl(apiBaseUrl);
+            RestClient.RequestHeadersSpec<?> request = client.get().uri(url);
             switch (provider) {
                 case ANTHROPIC -> request.headers(headers -> {
                     headers.set("x-api-key", apiKey);
@@ -51,8 +58,8 @@ public class ModelCatalogClient {
     }
 
     List<ModelOption> parseModels(ModelProvider provider, Map<?, ?> body) {
-        Object raw = body.get(provider == ModelProvider.GEMINI || provider == ModelProvider.OLLAMA
-                ? "models" : "data");
+        Object raw = body.get(provider == ModelProvider.CLOUDFLARE ? "result"
+                : provider == ModelProvider.GEMINI || provider == ModelProvider.OLLAMA ? "models" : "data");
         if (!(raw instanceof List<?> entries)) {
             throw new IllegalStateException("Provider did not return a model list");
         }
@@ -67,7 +74,7 @@ public class ModelCatalogClient {
     }
 
     private ModelOption toOption(ModelProvider provider, Map<?, ?> entry) {
-        Object rawId = entry.get(provider == ModelProvider.OLLAMA ? "name" :
+        Object rawId = entry.get(provider == ModelProvider.CLOUDFLARE || provider == ModelProvider.OLLAMA ? "name" :
                 provider == ModelProvider.GEMINI ? "name" : "id");
         if (!(rawId instanceof String id) || id.isBlank()) {
             return null;

@@ -10,6 +10,7 @@ public enum ModelProvider {
     DASHSCOPE("Alibaba Cloud Model Studio (international)", "https://dashscope-intl.aliyuncs.com/api/v1/models?page_size=100", true, true, true),
     ANTHROPIC("Claude", "https://api.anthropic.com/v1/models?limit=100", true, false, true),
     GEMINI("Gemini", "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000", true, true, true),
+    CLOUDFLARE("Cloudflare Workers AI", "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/models/search", true, true, true),
     OLLAMA("Ollama (local)", "http://127.0.0.1:11434/api/tags", true, true, false);
 
     private final String displayName;
@@ -28,6 +29,17 @@ public enum ModelProvider {
 
     public String displayName() { return displayName; }
     public String catalogUrl() { return catalogUrl; }
+    public String catalogUrl(String apiBaseUrl) {
+        if (apiBaseUrl == null) return catalogUrl;
+        return apiBaseUrl + switch (this) {
+            case DASHSCOPE -> "/models?page_size=100";
+            case ANTHROPIC -> "/models?limit=100";
+            case GEMINI -> "/models?pageSize=1000";
+            case CLOUDFLARE -> throw new IllegalArgumentException("Cloudflare model discovery requires accountId");
+            case OLLAMA -> "/api/tags";
+            default -> "/models";
+        };
+    }
     public boolean requiresApiKey() { return requiresApiKey; }
 
     public List<ModelPurpose> supportedPurposes() {

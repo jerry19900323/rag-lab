@@ -5,5 +5,9 @@ import java.time.Instant;
 /** Safe connection fields shown on the administrator page. */
 public record ModelConnectionView(
         String connectionId, String name, ModelProvider provider, boolean enabled,
-        boolean hasApiKey, Instant createdAt, Instant updatedAt) {
+        boolean hasApiKey, Instant createdAt, Instant updatedAt, String accountId, String apiBaseUrl) {
+    public ModelConnectionView(String connectionId, String name, ModelProvider provider, boolean enabled,
+            boolean hasApiKey, Instant createdAt, Instant updatedAt) {
+        this(connectionId, name, provider, enabled, hasApiKey, createdAt, updatedAt, null, null);
+    }
 }

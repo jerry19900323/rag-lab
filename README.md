@@ -221,7 +221,8 @@ Results include relevance scores, chunk text, offsets, and source references for
 Administrators can configure provider connections and select models for answer generation,
 embeddings, and routing through `/api/admin/model-*`. The initial presets are OpenAI, DeepSeek,
 Alibaba Cloud Model Studio (international), Claude, Gemini, and local Ollama. Model dropdown
-options come from the providers' live model-list APIs. Set `MODEL_CONFIG_ENCRYPTION_KEY` to a
+options come from the providers' live model-list APIs. Cloudflare Workers AI is also supported;
+its connection requires an Account ID and API token. Set `MODEL_CONFIG_ENCRYPTION_KEY` to a
 base64-encoded 32-byte key before saving provider API keys; `application.yml` reads this
 environment variable through `rag.model-config.encryption-key`. In IntelliJ IDEA, add
 `MODEL_CONFIG_ENCRYPTION_KEY=<generated-value>` to the application's Run Configuration

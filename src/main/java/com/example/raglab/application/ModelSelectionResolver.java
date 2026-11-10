@@ -27,6 +27,11 @@ public class ModelSelectionResolver {
                         .map(connection -> new ResolvedModel(
                                 usageType, connection.provider(),
                                 assignment.modelId(), connection.encryptedApiKey() == null
-                                        ? null : cipher.decrypt(connection.encryptedApiKey()))));
+                                        ? null : cipher.decrypt(connection.encryptedApiKey()),
+                                connection.accountId(), connection.apiBaseUrl() != null ? connection.apiBaseUrl()
+                                        : connection.provider() == ModelProvider.CLOUDFLARE
+                                                ? "https://api.cloudflare.com/client/v4/accounts/"
+                                                        + connection.accountId() + "/ai/v1"
+                                                : null)));
     }
 }

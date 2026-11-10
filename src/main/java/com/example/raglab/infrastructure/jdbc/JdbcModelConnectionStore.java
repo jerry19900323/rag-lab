@@ -40,13 +40,15 @@ public class JdbcModelConnectionStore implements ModelConnectionStore {
     public void saveConnection(ModelConnection connection) {
         jdbc.update("""
                 INSERT INTO rag_model_connections
-                    (connection_id, name, provider, api_key_encrypted, enabled, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (connection_id, name, provider, account_id, api_base_url,
+                     api_key_encrypted, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE name = VALUES(name), provider = VALUES(provider),
+                    account_id = VALUES(account_id), api_base_url = VALUES(api_base_url),
                     api_key_encrypted = VALUES(api_key_encrypted), enabled = VALUES(enabled),
                     updated_at = VALUES(updated_at)
                 """, connection.connectionId(), connection.name(), connection.provider().name(),
-                connection.encryptedApiKey(), connection.enabled(),
+                connection.accountId(), connection.apiBaseUrl(), connection.encryptedApiKey(), connection.enabled(),
                 Timestamp.from(connection.createdAt()), Timestamp.from(connection.updatedAt()));
     }
 
@@ -87,7 +89,8 @@ public class JdbcModelConnectionStore implements ModelConnectionStore {
         return new ModelConnection(row.getString("connection_id"), row.getString("name"),
                 ModelProvider.valueOf(row.getString("provider")), row.getString("api_key_encrypted"),
                 row.getBoolean("enabled"), row.getTimestamp("created_at").toInstant(),
-                row.getTimestamp("updated_at").toInstant());
+                row.getTimestamp("updated_at").toInstant(), row.getString("account_id"),
+                row.getString("api_base_url"));
     }
 
     private ModelAssignment assignment(ResultSet row, int ignored) throws SQLException {

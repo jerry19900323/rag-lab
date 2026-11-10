@@ -5,11 +5,14 @@ public record ResolvedModel(
         ModelPurpose usageType,
         ModelProvider provider,
         String modelId,
-        String apiKey) {
+        String apiKey,
+        String accountId,
+        String apiBaseUrl) {
 
     @Override
     public String toString() {
         return "ResolvedModel[usageType=" + usageType + ", provider=" + provider
-                + ", modelId=" + modelId + ", apiKey=<redacted>]";
+                + ", modelId=" + modelId + ", apiKey=<redacted>, accountId=" + accountId
+                + ", apiBaseUrl=" + apiBaseUrl + "]";
     }
 }

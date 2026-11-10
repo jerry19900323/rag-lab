@@ -103,7 +103,7 @@ Offsets refer to normalized content after optional UTF-8 BOM removal and line-en
 | `GET` | `/api/admin/model-providers` | Admin bearer | List supported provider presets and purposes. |
 | `GET` | `/api/admin/model-usage-types` | Admin bearer | List selectable model usage types. |
 | `GET` | `/api/admin/model-connections` | Admin bearer | List saved connections without credentials. |
-| `POST` | `/api/admin/model-connections` | Admin bearer | Save a provider connection. |
+| `POST` | `/api/admin/model-connections` | Admin bearer | Save a provider connection; Cloudflare also saves its selected model ID and usage type. |
 | `PUT` | `/api/admin/model-connections/{id}` | Admin bearer | Edit or disable a connection. |
 | `DELETE` | `/api/admin/model-connections/{id}` | Admin bearer | Delete a connection and clear its purpose assignments. |
 | `GET` | `/api/admin/model-connections/{id}/models` | Admin bearer | Load a live provider model list. |
@@ -720,7 +720,8 @@ The page has two areas:
    “configured” or “missing”; never expect the API to return the key itself. Show a Delete action
    on every saved connection row, with a confirmation dialog.
 2. **Add or change a model:** choose one usage type, an enabled connection, and one model ID.
-   Save with `PUT /api/admin/model-assignments/{purpose}`. Each usage type has one selected
+   For a new Cloudflare connection, submit both fields in `POST /api/admin/model-connections`.
+   For an existing connection, save with `PUT /api/admin/model-assignments/{purpose}`. Each usage type has one selected
    model; saving another model for the same type replaces it. Show the current selections from
    `GET /api/admin/model-assignments`. To remove one selection, send both IDs as `null` through
    that same `PUT` endpoint. Allow manual model ID entry when the catalog is incomplete or
@@ -729,13 +730,17 @@ The page has two areas:
 The add flow uses these calls in order:
 
 1. If the provider connection does not exist yet, save its name, provider, and API key with
-   `POST /api/admin/model-connections`. Keep the returned `connectionId`. If it already exists,
-   select its `connectionId` from `GET /api/admin/model-connections`.
-2. Call `GET /api/admin/model-connections/{id}/models` for that connection and choose a `modelId`.
-   The form also lets the administrator enter a model ID manually.
-3. Choose **one** `usageType` from `GET /api/admin/model-usage-types`. Send the connection ID and
-   model ID to `PUT /api/admin/model-assignments/{usageType}`. The usage code belongs in the URL,
-   not in the JSON body or the connection-creation request.
+   `POST /api/admin/model-connections`. For Cloudflare, the form must also ask for **usage type**
+   and **model ID** and send both in this request. Keep the returned `connectionId`. If the
+   connection already exists, select it from `GET /api/admin/model-connections`.
+2. For an existing connection, call `GET /api/admin/model-connections/{id}/models` and choose
+   a `modelId`. The form also lets the administrator enter a model ID manually. For a new
+   Cloudflare connection, enter the model ID directly in the creation form; the model list
+   becomes available after the connection has been saved.
+3. For an existing connection, choose **one** `usageType` from
+   `GET /api/admin/model-usage-types` and send the connection ID and model ID to
+   `PUT /api/admin/model-assignments/{usageType}`. For a new Cloudflare connection, the first
+   request already saves the model assignment; do not send this `PUT` again.
 4. Refresh `GET /api/admin/model-assignments` and display the saved model next to its usage type.
    If that type already has a model, explain that saving will replace the existing selection.
 
@@ -775,12 +780,13 @@ The initial provider presets are:
 | `DASHSCOPE` | Alibaba Cloud Model Studio (international) | International Model Studio models API | Chat, text embedding | Required |
 | `ANTHROPIC` | Claude | Anthropic models API | Chat | Required |
 | `GEMINI` | Gemini | Gemini models API | Chat, text embedding | Required |
+| `CLOUDFLARE` | Cloudflare Workers AI | Cloudflare account's Workers AI model search API | Chat, text embedding | Required |
 | `OLLAMA` | Ollama (local) | `127.0.0.1:11434/api/tags` on the backend host | Chat, text embedding | Not used |
 
 The Model Studio preset uses the **international** catalog. Its API key must be valid for that
 region. The Ollama preset connects to the **backend server's** localhost, not the browser's
-computer. Provider URLs are fixed server-side; clients cannot supply arbitrary URLs in this
-version. A model missing from a provider's catalog may be entered manually in the assignment
+computer. A connection may override its provider's default API base URL. A model missing from
+a provider's catalog may be entered manually in the assignment
 form, but a manual ID is not connection-tested by this API.
 
 ### List provider presets
@@ -842,6 +848,8 @@ Status: `200 OK`. Returns an array; when no connections exist it returns `[]`.
     "connectionId": "3e246d55-2b69-4e13-88bb-8e31dd479e7d",
     "name": "Main OpenAI account",
     "provider": "OPENAI",
+    "accountId": "organization-or-account-id",
+    "apiBaseUrl": "https://api.openai.com/v1",
     "enabled": true,
     "hasApiKey": true,
     "createdAt": "2026-11-02T08:00:00Z",
@@ -860,21 +868,92 @@ Content-Type: application/json
 {
   "name": "Main OpenAI account",
   "provider": "OPENAI",
+  "accountId": "organization-or-account-id",
+  "apiBaseUrl": "https://api.openai.com/v1",
   "apiKey": "provider-secret-key",
   "enabled": true
 }
 ```
 
 Status: `201 Created`; response is one connection object in the same safe shape as the list.
-`name` must contain 1–100 characters after trimming. `provider` must be one of the preset enum
-values. `apiKey` is required except for `OLLAMA`; it is never returned. `enabled` defaults to
-`true` on creation. Do not persist the form's `apiKey` in browser storage.
+The request fields are:
 
-Edit an existing connection using `PUT /api/admin/model-connections/{id}` with the same JSON
-shape. Status: `200 OK`; the response is the updated safe connection object. Send `apiKey: null`
+| Field | Required on create | Frontend meaning |
+| --- | --- | --- |
+| `name` | Yes | Connection name; 1–100 characters after trimming. |
+| `provider` | Yes | One of the codes from `GET /api/admin/model-providers`; use `CLOUDFLARE` for Workers AI. |
+| `apiKey` | Yes, except `OLLAMA` | Provider API key or Cloudflare Workers AI API token. Never returned by the API. |
+| `accountId` | For `CLOUDFLARE` | Cloudflare Account ID. For other providers, optional metadata; maximum 200 characters. |
+| `apiBaseUrl` | No | Optional HTTP(S) base URL; maximum 500 characters. Cloudflare's official URL is derived from `accountId` if omitted. |
+| `usageType` | For `CLOUDFLARE` | One code from `GET /api/admin/model-usage-types`, such as `ANSWER` or `EMBEDDING`. |
+| `modelId` | For `CLOUDFLARE` | Exact model identifier, such as `@cf/meta/llama-3.1-8b-instruct`; 1–200 characters after trimming. |
+| `enabled` | No | Defaults to `true`; must be enabled when saving a model ID in the same request. |
+
+For other providers, `usageType` and `modelId` may also be sent together when creating a
+connection. Either send both or omit both. A selected usage must be supported by that provider.
+`accountId` is optional provider account metadata outside Cloudflare;
+it is stored and returned but is not sent automatically as a provider authentication header.
+`apiBaseUrl` is an optional HTTP(S) base URL (maximum 500 characters), without credentials,
+query, or fragment. Omit it to use the provider preset. The URL is stored and returned; the
+backend also uses it for model-list requests. For OpenAI-compatible APIs, enter the base URL
+ending at `/v1`, not the full `/models` URL. Other providers should use the base path preceding
+their models endpoint; for Ollama, enter the server root such as `http://127.0.0.1:11434`.
+For `CLOUDFLARE`, `accountId`, `usageType`, and `modelId` are required when creating a connection.
+Enter a Cloudflare Workers AI API token as `apiKey`;
+the model list comes from the account's Workers AI model search API. If `apiBaseUrl` is omitted,
+the backend resolves the model for future calls with
+`https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/v1`. A custom `apiBaseUrl` is
+stored for future inference calls, while catalog discovery still uses Cloudflare's official
+account endpoint. Use model IDs such as `@cf/meta/llama-3.1-8b-instruct` for chat or an
+appropriate `@cf/...` embedding model. The account ID can contain letters, digits, `_`, and `-`.
+See [Cloudflare's OpenAI-compatible API](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/)
+and [model search API](https://developers.cloudflare.com/api/resources/ai/subresources/models/methods/list/).
+Do not persist the form's `apiKey` in browser storage.
+
+For the **Add Cloudflare model** form, show input fields for Account ID, API token, usage type,
+and model ID. Make all four required before enabling Save. The model ID can be typed directly;
+it need not appear in the live model list. If the selected usage already has a model, show the
+existing model ID and explain that saving will replace it.
+For example, to add a document-answering model in one request:
+
+```http
+POST /api/admin/model-connections
+Authorization: Bearer <adminAccessToken>
+Content-Type: application/json
+
+{
+  "name": "Cloudflare Workers AI",
+  "provider": "CLOUDFLARE",
+  "accountId": "your-cloudflare-account-id",
+  "apiKey": "your-workers-ai-api-token",
+  "usageType": "ANSWER",
+  "modelId": "@cf/meta/llama-3.1-8b-instruct"
+}
+```
+
+Status: `201 Created`. The response is the safe connection object above, without `apiKey`.
+The selected model ID is stored in `rag_model_assignments.model_id` under `usage_type=ANSWER`;
+the connection response does not contain `modelId` or `usageType`. Call
+`GET /api/admin/model-assignments` to display it after creation. If the type already has
+another model, this request replaces that type's assignment. Creation and assignment are one
+database transaction. Missing Account ID, usage type, model ID, or API token returns `400`.
+For an existing Cloudflare connection, use `PUT /api/admin/model-assignments/{usageType}` to
+change its model ID; the connection update endpoint edits connection settings only.
+
+```shell
+curl -X POST http://localhost:8080/api/admin/model-connections \
+  -H 'Authorization: Bearer session-token' -H 'Content-Type: application/json' \
+  -d '{"name":"Cloudflare Workers AI","provider":"CLOUDFLARE","accountId":"your-cloudflare-account-id","apiKey":"your-workers-ai-api-token","usageType":"ANSWER","modelId":"@cf/meta/llama-3.1-8b-instruct"}'
+```
+
+Edit an existing connection using `PUT /api/admin/model-connections/{id}` with the connection
+fields from the JSON example; `usageType` and `modelId` are only used on creation. Status:
+`200 OK`; the response is the updated safe connection object. Send `apiKey: null`
 or omit it to retain the stored key. Send a new key to replace it. If `enabled` is omitted on
 update, its previous value is retained. The `provider` must remain the original provider;
-create a new connection to switch providers. Set `enabled: false` to disable a connection.
+create a new connection to switch providers. Omitting `accountId` or `apiBaseUrl` on update
+retains the stored value; send an empty string to clear either field. Set `enabled: false` to
+disable a connection.
 
 ```shell
 curl -X PUT http://localhost:8080/api/admin/model-connections/3e246d55-2b69-4e13-88bb-8e31dd479e7d \
@@ -947,6 +1026,9 @@ Status: `200 OK`. Returns a dynamically fetched array such as:
 Use `modelId` as the value saved in a purpose assignment, and `displayName` as the dropdown
 label. An empty array means the catalog returned no models. Call this when a connection is
 selected and when the user clicks “Refresh models”; do not call it on every page render.
+For most providers the request uses the connection's `apiBaseUrl` when configured, otherwise
+the preset URL. Cloudflare model discovery always uses its Account ID and official account
+model search endpoint.
 
 ```http
 POST /api/admin/model-connections/{id}/test
@@ -1008,6 +1090,9 @@ Status: `200 OK`; returns the saved assignment, for example
 The database stores the selected code in `rag_model_assignments.usage_type`. That column is the
 primary key, so saving the same type again replaces its previous model. The frontend should show
 the current assignment before replacing it, then refresh `GET /api/admin/model-assignments`.
+For a conversation model, select `ANSWER` (document answers) or `CHAT` (general chat) and put
+the provider's **conversation model ID** in `modelId`. This value is already persisted in
+`rag_model_assignments.model_id`; it is not duplicated on the connection record.
 
 To remove the selected model for one type, send `{"connectionId":null,"modelId":null}` to the
 same path and refresh the list. This clears the selection for that usage type; it does not delete
