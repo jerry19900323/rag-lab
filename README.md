@@ -228,12 +228,42 @@ environment variable through `rag.model-config.encryption-key`. In IntelliJ IDEA
 `MODEL_CONFIG_ENCRYPTION_KEY=<generated-value>` to the application's Run Configuration
 environment variables. Keep this key across restarts and do not commit its value.
 See the [API Reference](docs/decisions/api-reference.md#administrator-model-settings-api) for
-frontend page behavior and endpoint schemas. These settings are preparatory; model invocation
-in indexing and question answering is a later stage.
+frontend page behavior and endpoint schemas. When `EMBEDDING` is configured, document and web
+page indexing store chunk vectors, and `/api/search` uses vector similarity; otherwise search
+continues to use keywords. Existing content must be re-indexed to gain vectors. Single-turn
+Document and web-page ingestion also creates one short file-level description. A configured
+`DOCUMENT_SUMMARY` model is preferred, followed by `ANSWER` or `CHAT`; without any chat model,
+the backend stores a representative extract. The description is saved in MySQL and as one
+file-level ES record. Document questions first search these descriptions, use the routing model
+to choose relevant files, then search chunks only within those files. Existing documents must
+be uploaded again with the same `documentId` to gain descriptions; the backend does not delete
+them automatically. Single-turn
+chat is available through `POST /api/chat/ask` when `CHAT` or `ANSWER` is configured. Omit
+`mode` to let the backend route among conversation history, document search, both, and general
+chat; send `mode: "CHAT"` only when document search must be skipped. The configured `ROUTING`
+model handles this decision when present; otherwise the selected answer model does. Only
+document routes search the index. `ANSWER` and `CHAT` still fall back to each other when one
+is unavailable.
+For interactive chat, `POST /api/chat/ask/stream` emits SSE progress, selected sources, and
+model tokens; the original `/api/chat/ask` remains a synchronous JSON endpoint. RAG retrieval
+merges keyword and vector results when an embedding model is configured.
+The frontend starts a conversation with `POST /api/chat/conversations`, then sends its
+`conversationId` with each `/api/chat/ask` or `/api/chat/ask/stream` request. It can list
+conversations, read retained turns, and delete a conversation through the chat API. The backend
+uses the latest 10 completed turns per conversation as model context by default. Configure
+`CHAT_HISTORY_MAX_TURNS` and `CHAT_HISTORY_TTL` in the backend environment; the frontend does
+not send previous messages. Requests without `conversationId` retain the legacy implicit
+per-user history for compatibility.
+The backend also keeps a paged archive of all completed turns within the conversation's TTL
+and the latest 100 execution traces. `GET /api/chat/conversations/{id}/messages/page` restores
+full in-lifetime history; `GET /api/chat/conversations/{id}/traces` shows routing reasons,
+retrieval decisions, and step timings for troubleshooting.
 The add-model form selects one usage type and one model. Each usage type has one saved model;
 the runtime resolver looks up that type and skips missing or disabled connections.
 Administrators can remove a saved model connection with
 `DELETE /api/admin/model-connections/{id}`; its purpose assignments are cleared automatically.
+The model connection list and save responses include the API key so the existing Edit form can
+prefill its masked password input.
 
 On startup, the service idempotently creates the versioned `rag_chunks_v1` index and attaches
 the stable `rag_chunks` alias. Set `ES_INITIALIZE_INDEX=false` to disable this initialization.

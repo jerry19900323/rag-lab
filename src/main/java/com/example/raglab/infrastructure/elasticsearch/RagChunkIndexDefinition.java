@@ -2,8 +2,10 @@ package com.example.raglab.infrastructure.elasticsearch;
 
 import co.elastic.clients.elasticsearch._types.mapping.DynamicMapping;
 import co.elastic.clients.elasticsearch._types.mapping.TypeMapping;
+import co.elastic.clients.elasticsearch._types.mapping.Property;
 import co.elastic.clients.elasticsearch.indices.CreateIndexRequest;
 import co.elastic.clients.elasticsearch.indices.PutMappingRequest;
+import java.util.Map;
 
 /** Versioned Elasticsearch index definition for searchable document chunks. */
 public final class RagChunkIndexDefinition {
@@ -33,10 +35,14 @@ public final class RagChunkIndexDefinition {
                 .properties("documentHash", property -> property.keyword(keyword -> keyword))
                 .properties("chunkIndex", property -> property.integer(integer -> integer))
                 .properties("content", property -> property.text(text -> text))
+                .properties("documentSummary", property -> property.text(text -> text))
+                .properties("documentProfile", property -> property.boolean_(bool -> bool))
                 .properties("characterCount", property -> property.integer(integer -> integer))
                 .properties("startOffset", property -> property.integer(integer -> integer))
                 .properties("endOffset", property -> property.integer(integer -> integer))
                 .properties("contentHash", property -> property.keyword(keyword -> keyword))
+                .properties("embedding", property -> property.denseVector(vector -> vector))
+                .properties("embeddingModelKey", property -> property.keyword(keyword -> keyword))
                 .properties("indexedAt", property -> property.date(date -> date))
                 .properties("schemaVersion", property -> property.keyword(keyword -> keyword))
                 .properties("sourceReferences", property -> property.nested(nested -> nested
@@ -54,10 +60,13 @@ public final class RagChunkIndexDefinition {
     }
 
     /** Builds an additive mapping update for an index created by an older application build. */
-    public static PutMappingRequest updateMappingRequest() {
+    public static PutMappingRequest updateMappingRequest(Map<String, Property> existingProperties) {
+        Map<String, Property> missing = new java.util.LinkedHashMap<>(mapping().properties());
+        missing.keySet().removeAll(existingProperties.keySet());
+        if (missing.isEmpty()) return null;
         return new PutMappingRequest.Builder()
                 .index(INDEX_NAME)
-                .properties(mapping().properties())
+                .properties(missing)
                 .build();
     }
 }

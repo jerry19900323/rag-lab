@@ -59,12 +59,12 @@ public class JdbcDocumentMetadataStore implements DocumentMetadataStore {
                 UPDATE rag_documents
                 SET file_name = ?, document_type = ?, document_hash = ?,
                     character_count = ?, chunk_count = ?, current_ingestion_id = ?,
-                    status = 'COMPLETED', updated_at = ?
+                    document_summary = ?, status = 'COMPLETED', updated_at = ?
                 WHERE document_id = ?
                 """,
                 metadata.fileName(), metadata.documentType(), metadata.documentHash(),
                 metadata.characterCount(), metadata.chunkCount(), metadata.ingestionId(),
-                completion, metadata.documentId());
+                metadata.documentSummary(), completion, metadata.documentId());
     }
 
     @Override

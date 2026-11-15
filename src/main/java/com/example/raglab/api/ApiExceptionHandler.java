@@ -5,6 +5,8 @@ import com.example.raglab.application.DocumentDeletionConflictException;
 import com.example.raglab.application.DocumentMetadataDeleteException;
 import com.example.raglab.application.AdminRequiredException;
 import com.example.raglab.application.ModelCatalogException;
+import com.example.raglab.application.EmbeddingException;
+import com.example.raglab.application.ChatCompletionException;
 import com.example.raglab.application.ModelConfigurationUnavailableException;
 import com.example.raglab.application.ModelConnectionNotFoundException;
 import com.example.raglab.application.ModelConnectionDeleteException;
@@ -19,10 +21,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Converts expected input failures into consistent client-facing responses. */
 @RestControllerAdvice
 public class ApiExceptionHandler {
+    private static final Logger logger = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
     @ExceptionHandler(AdminRequiredException.class)
     @ResponseStatus(HttpStatus.FORBIDDEN)
@@ -46,6 +51,19 @@ public class ApiExceptionHandler {
     @ResponseStatus(HttpStatus.BAD_GATEWAY)
     public Map<String, String> handleModelCatalogFailure(ModelCatalogException exception) {
         return Map.of("error", "The provider model list could not be loaded");
+    }
+
+    @ExceptionHandler(EmbeddingException.class)
+    @ResponseStatus(HttpStatus.BAD_GATEWAY)
+    public Map<String, String> handleEmbeddingFailure(EmbeddingException exception) {
+        return Map.of("error", exception.getMessage());
+    }
+
+    @ExceptionHandler(ChatCompletionException.class)
+    @ResponseStatus(HttpStatus.BAD_GATEWAY)
+    public Map<String, String> handleChatCompletionFailure(ChatCompletionException exception) {
+        logger.warn("Returning HTTP 502 for model request failure: error={}", exception.getMessage());
+        return Map.of("error", exception.getMessage());
     }
 
     @ExceptionHandler(ModelConfigurationUnavailableException.class)

@@ -4,6 +4,8 @@ import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch.indices.ElasticsearchIndicesClient;
 import co.elastic.clients.elasticsearch.indices.ExistsAliasRequest;
 import co.elastic.clients.elasticsearch.indices.ExistsRequest;
+import co.elastic.clients.elasticsearch.indices.GetMappingRequest;
+import co.elastic.clients.elasticsearch.indices.PutMappingRequest;
 import co.elastic.clients.elasticsearch.indices.PutAliasRequest;
 import java.io.IOException;
 import org.slf4j.Logger;
@@ -59,7 +61,15 @@ public class RagChunkIndexInitializer implements ApplicationRunner {
             return;
         }
 
-        indices.putMapping(RagChunkIndexDefinition.updateMappingRequest());
+        var existingMapping = indices.getMapping(new GetMappingRequest.Builder()
+                .index(RagChunkIndexDefinition.INDEX_NAME).build())
+                .get(RagChunkIndexDefinition.INDEX_NAME);
+        if (existingMapping == null) {
+            throw new IllegalStateException("Elasticsearch did not return the existing chunk index mapping");
+        }
+        PutMappingRequest update = RagChunkIndexDefinition.updateMappingRequest(
+                existingMapping.mappings().properties());
+        if (update != null) indices.putMapping(update);
 
         ExistsAliasRequest aliasRequest = new ExistsAliasRequest.Builder()
                 .name(RagChunkIndexDefinition.INDEX_ALIAS)

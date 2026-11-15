@@ -39,7 +39,9 @@ public class ModelSettingsService {
     }
 
     public List<ModelConnectionView> connections() {
-        return store.listConnections().stream().map(ModelConnection::view).toList();
+        return store.listConnections().stream().map(connection -> view(connection,
+                connection.encryptedApiKey() == null ? null : cipher.decrypt(connection.encryptedApiKey())))
+                .toList();
     }
 
     @Transactional
@@ -75,7 +77,7 @@ public class ModelSettingsService {
             store.saveAssignment(new ModelAssignment(input.usageType(), connection.connectionId(),
                     input.modelId().trim(), now));
         }
-        return connection.view();
+        return view(connection, input.apiKey() == null ? null : input.apiKey().trim());
     }
 
     public ModelConnectionView update(String id, ModelConnectionInput input) {
@@ -92,7 +94,16 @@ public class ModelSettingsService {
                 input.accountId() == null ? old.accountId() : normalizeAccountId(input.accountId()),
                 input.apiBaseUrl() == null ? old.apiBaseUrl() : normalizeApiBaseUrl(input.apiBaseUrl()));
         store.saveConnection(connection);
-        return connection.view();
+        String apiKey = input.apiKey() != null && !input.apiKey().isBlank()
+                ? input.apiKey().trim()
+                : connection.encryptedApiKey() == null ? null : cipher.decrypt(connection.encryptedApiKey());
+        return view(connection, apiKey);
+    }
+
+    private ModelConnectionView view(ModelConnection connection, String apiKey) {
+        return new ModelConnectionView(connection.connectionId(), connection.name(), connection.provider(),
+                connection.enabled(), connection.encryptedApiKey() != null, connection.createdAt(),
+                connection.updatedAt(), connection.accountId(), connection.apiBaseUrl(), apiKey);
     }
 
     public void delete(String id) {

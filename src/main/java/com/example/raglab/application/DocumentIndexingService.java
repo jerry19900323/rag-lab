@@ -20,6 +20,8 @@ public class DocumentIndexingService {
     private final Sha256HashService hashService;
     private final DocumentMetadataStore metadataStore;
     private final DocumentIndexLock indexLock;
+    private final EmbeddingService embeddingService;
+    private final DocumentSummaryGenerator summaryGenerator;
 
     public DocumentIndexingService(
             DocumentProcessingService processingService,
@@ -27,13 +29,17 @@ public class DocumentIndexingService {
             DocumentIdentifierGenerator identifierGenerator,
             Sha256HashService hashService,
             DocumentMetadataStore metadataStore,
-            DocumentIndexLock indexLock) {
+            DocumentIndexLock indexLock,
+            EmbeddingService embeddingService,
+            DocumentSummaryGenerator summaryGenerator) {
         this.processingService = processingService;
         this.chunkStore = chunkStore;
         this.identifierGenerator = identifierGenerator;
         this.hashService = hashService;
         this.metadataStore = metadataStore;
         this.indexLock = indexLock;
+        this.embeddingService = embeddingService;
+        this.summaryGenerator = summaryGenerator;
     }
 
     /** Processes and atomically replaces the indexed generation of one logical document. */
@@ -68,11 +74,16 @@ public class DocumentIndexingService {
             String documentHash) {
         String ingestionId = identifierGenerator.newIngestionId();
         Instant indexedAt = Instant.now();
+        String summary = summaryGenerator.summarize(processed);
         DocumentIngestionMetadata metadata = new DocumentIngestionMetadata(
                 documentId, ingestionId, processed.fileName(), processed.documentType(),
-                documentHash, processed.characterCount(), processed.chunkCount(), indexedAt);
+                documentHash, processed.characterCount(), processed.chunkCount(), indexedAt, summary);
 
-        List<ElasticsearchChunkDocument> chunks = processed.chunks().stream()
+        metadataStore.begin(metadata);
+        try {
+            boolean embeddingConfigured = embeddingService.configured();
+            String embeddingModelKey = embeddingConfigured ? embeddingService.modelKey() : null;
+            List<ElasticsearchChunkDocument> chunks = new java.util.ArrayList<>(processed.chunks().stream()
                 .map(chunk -> new ElasticsearchChunkDocument(
                         documentId,
                         ingestionId,
@@ -87,11 +98,14 @@ public class DocumentIndexingService {
                         chunk.sourceReferences(),
                         hashService.hashText(chunk.content()),
                         indexedAt,
-                        ElasticsearchChunkDocument.SCHEMA_VERSION))
-                .toList();
-
-        metadataStore.begin(metadata);
-        try {
+                        ElasticsearchChunkDocument.SCHEMA_VERSION,
+                        embeddingConfigured ? embeddingService.embed(chunk.content()) : null,
+                        embeddingModelKey))
+                    .toList());
+            chunks.add(new ElasticsearchChunkDocument(documentId, ingestionId,
+                    processed.fileName(), processed.documentType(), documentHash,
+                    -1, "", 0, 0, 0, List.of(), hashService.hashText(summary), indexedAt,
+                    ElasticsearchChunkDocument.SCHEMA_VERSION, null, null, summary, true));
             chunkStore.replaceDocumentChunks(documentId, ingestionId, chunks);
         } catch (RuntimeException exception) {
             recordFailure(metadata, exception);
@@ -106,7 +120,8 @@ public class DocumentIndexingService {
                 documentHash,
                 processed.characterCount(),
                 processed.chunkCount(),
-                indexedAt);
+                indexedAt,
+                summary);
     }
 
     private String safeMessage(RuntimeException exception) {

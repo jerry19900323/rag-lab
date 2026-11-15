@@ -31,7 +31,7 @@ public class JdbcDocumentMetadataQuery implements DocumentMetadataQuery {
         return jdbcTemplate.query("""
                 SELECT document_id, file_name, document_type, document_hash,
                        character_count, chunk_count, current_ingestion_id,
-                       status, created_at, updated_at
+                       status, created_at, updated_at, document_summary
                 FROM rag_documents
                 WHERE LOCATE(LOWER(?), LOWER(file_name)) > 0
                 ORDER BY updated_at DESC, document_id ASC
@@ -55,7 +55,7 @@ public class JdbcDocumentMetadataQuery implements DocumentMetadataQuery {
         return jdbcTemplate.query("""
                 SELECT document_id, file_name, document_type, document_hash,
                        character_count, chunk_count, current_ingestion_id,
-                       status, created_at, updated_at
+                       status, created_at, updated_at, document_summary
                 FROM rag_documents
                 ORDER BY updated_at DESC, document_id ASC
                 LIMIT ? OFFSET ?
@@ -68,13 +68,26 @@ public class JdbcDocumentMetadataQuery implements DocumentMetadataQuery {
             return Optional.ofNullable(jdbcTemplate.queryForObject("""
                     SELECT document_id, file_name, document_type, document_hash,
                            character_count, chunk_count, current_ingestion_id,
-                           status, created_at, updated_at
+                           status, created_at, updated_at, document_summary
                     FROM rag_documents
                     WHERE document_id = ?
                     """, this::mapDocument, documentId));
         } catch (EmptyResultDataAccessException exception) {
             return Optional.empty();
         }
+    }
+
+    @Override
+    public List<DocumentSummary> findByExactFileName(String fileName, int limit) {
+        return jdbcTemplate.query("""
+                SELECT document_id, file_name, document_type, document_hash,
+                       character_count, chunk_count, current_ingestion_id,
+                       status, created_at, updated_at, document_summary
+                FROM rag_documents
+                WHERE file_name = ?
+                ORDER BY document_id ASC
+                LIMIT ?
+                """, this::mapDocument, fileName, limit);
     }
 
     @Override
@@ -110,7 +123,8 @@ public class JdbcDocumentMetadataQuery implements DocumentMetadataQuery {
                 resultSet.getString("current_ingestion_id"),
                 resultSet.getString("status"),
                 toInstant(resultSet.getTimestamp("created_at")),
-                toInstant(resultSet.getTimestamp("updated_at")));
+                toInstant(resultSet.getTimestamp("updated_at")),
+                resultSet.getString("document_summary"));
     }
 
     private IngestionSummary mapIngestion(ResultSet resultSet, int rowNumber) throws SQLException {

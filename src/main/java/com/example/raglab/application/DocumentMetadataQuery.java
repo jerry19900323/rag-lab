@@ -12,6 +12,8 @@ public interface DocumentMetadataQuery {
 
     Optional<DocumentSummary> findDocument(String documentId);
 
+    List<DocumentSummary> findByExactFileName(String fileName, int limit);
+
     List<IngestionSummary> findIngestions(String documentId, int page, int size);
 
     long countIngestions(String documentId);

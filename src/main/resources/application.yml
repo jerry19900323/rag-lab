@@ -38,6 +38,9 @@ server:
   port: ${SERVER_PORT:8080}
 
 rag:
+  chat:
+    history-max-turns: ${CHAT_HISTORY_MAX_TURNS:10}
+    history-ttl: ${CHAT_HISTORY_TTL:24h}
   model-config:
     encryption-key: ${MODEL_CONFIG_ENCRYPTION_KEY:}
   elasticsearch:

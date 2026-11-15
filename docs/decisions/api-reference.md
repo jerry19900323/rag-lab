@@ -99,10 +99,18 @@ Offsets refer to normalized content after optional UTF-8 BOM removal and line-en
 | `DELETE` | `/api/documents/{documentId}` | Admin bearer | Delete an indexed document, its chunks, and ingestion history. |
 | `POST` | `/api/web-pages/preview` | Bearer | Fetch public HTML pages and preview chunks. |
 | `POST` | `/api/web-pages/index` | Bearer | Fetch public HTML pages and persist their chunks. |
-| `GET` | `/api/search` | Bearer | Search indexed chunks by keyword. |
+| `GET` | `/api/search` | Bearer | Search indexed chunks by configured embeddings, or by keyword when no embedding model is configured. |
+| `POST` | `/api/chat/ask` | Bearer | Generate a single chat reply or a document-grounded answer. |
+| `POST` | `/api/chat/ask/stream` | Bearer | Stream retrieval progress, sources, and model tokens as SSE. |
+| `POST` | `/api/chat/conversations` | Bearer | Start a new conversation and return its ID. |
+| `GET` | `/api/chat/conversations` | Bearer | List the current user's active conversations. |
+| `GET` | `/api/chat/conversations/{conversationId}/messages` | Bearer | Read the stored turns of one conversation. |
+| `GET` | `/api/chat/conversations/{conversationId}/messages/page` | Bearer | Page through all completed turns within the conversation's lifetime. |
+| `GET` | `/api/chat/conversations/{conversationId}/traces` | Bearer | Review recent question execution traces. |
+| `DELETE` | `/api/chat/conversations/{conversationId}` | Bearer | Delete one conversation and its stored turns. |
 | `GET` | `/api/admin/model-providers` | Admin bearer | List supported provider presets and purposes. |
 | `GET` | `/api/admin/model-usage-types` | Admin bearer | List selectable model usage types. |
-| `GET` | `/api/admin/model-connections` | Admin bearer | List saved connections without credentials. |
+| `GET` | `/api/admin/model-connections` | Admin bearer | List saved connections, including API keys for editing. |
 | `POST` | `/api/admin/model-connections` | Admin bearer | Save a provider connection; Cloudflare also saves its selected model ID and usage type. |
 | `PUT` | `/api/admin/model-connections/{id}` | Admin bearer | Edit or disable a connection. |
 | `DELETE` | `/api/admin/model-connections/{id}` | Admin bearer | Delete a connection and clear its purpose assignments. |
@@ -350,9 +358,13 @@ curl -X POST http://localhost:8080/api/documents/preview \
 
 ### Index Document
 
-Parses and chunks a document, records its lifecycle in MySQL, and atomically replaces the current
-document generation in Elasticsearch. A Redis lock prevents concurrent indexing of the same logical
-document.
+Parses and chunks a document, generates a short file-level description, records its lifecycle
+in MySQL, and replaces the current document generation in Elasticsearch. A Redis lock prevents
+concurrent indexing of the same logical document. The file-level description is generated from
+representative beginning, middle, and ending excerpts: a configured `DOCUMENT_SUMMARY` model is
+used first, otherwise `ANSWER`, then `CHAT`. If none is configured, the backend stores a short
+extractive sample so uploads still work. A configured summary model failure fails this upload;
+it is not silently ignored. The description is a search locator, not evidence for the final answer.
 
 ```http
 POST /api/documents/index
@@ -378,6 +390,7 @@ Status: `201 Created`
   "documentHash": "43c5f6a7b8c9d0e1...",
   "characterCount": 1240,
   "chunkCount": 2,
+  "summary": "Project notes describing access approval and staff responsibilities.",
   "indexedAt": "2026-11-01T07:30:00Z"
 }
 ```
@@ -385,7 +398,7 @@ Status: `201 Created`
 | Status | Condition | Example `error` |
 | --- | --- | --- |
 | `409` | Another request is indexing the same `documentId`. | `Document ... is already being indexed` |
-| `502` | Elasticsearch could not store the chunks. | `The document could not be stored in the search index` |
+| `502` | The configured summary or embedding model failed, or Elasticsearch could not store the chunks and file description. | `Document summary request failed`, `Embedding provider request failed`, or an Elasticsearch error. |
 
 ```shell
 curl -X POST http://localhost:8080/api/documents/index \
@@ -422,6 +435,7 @@ Status: `200 OK`
       "documentHash": "43c5f6a7b8c9d0e1...",
       "characterCount": 9200,
       "chunkCount": 14,
+      "summary": "Employee handbook covering access approval and staff responsibilities.",
       "currentIngestionId": "ing-5ee39f20",
       "status": "COMPLETED",
       "createdAt": "2026-11-01T07:20:00Z",
@@ -435,7 +449,9 @@ Status: `200 OK`
 }
 ```
 
-Document status values are `PROCESSING`, `COMPLETED`, or `FAILED`.
+Document status values are `PROCESSING`, `COMPLETED`, or `FAILED`. `summary` is available in
+the list and detail responses after a successful new upload; it is `null` for older documents
+until they are uploaded again. The frontend can display it under the filename.
 
 ```shell
 curl 'http://localhost:8080/api/documents?page=0&size=20&document=handbook' \
@@ -698,6 +714,7 @@ Status: `201 Created`
     "documentHash": "43c5f6a7b8c9d0e1...",
     "characterCount": 1600,
     "chunkCount": 3,
+    "summary": "Articles from example.com about the imported topics.",
     "indexedAt": "2026-11-01T07:30:00Z"
   }
 }
@@ -716,8 +733,8 @@ Build a **Model Settings** page visible to users whose login or `/api/auth/me` r
 The page has two areas:
 
 1. **Connections:** list saved providers, add a connection, edit its name or key, enable/disable
-   or delete it, load its available models, and test catalog access. Show `hasApiKey` as
-   “configured” or “missing”; never expect the API to return the key itself. Show a Delete action
+   or delete it, load its available models, and test catalog access. The connection list
+   returns `apiKey` so the existing Edit action can prefill its password input. Show a Delete action
    on every saved connection row, with a confirmation dialog.
 2. **Add or change a model:** choose one usage type, an enabled connection, and one model ID.
    For a new Cloudflare connection, submit both fields in `POST /api/admin/model-connections`.
@@ -755,8 +772,9 @@ number of discovered models. It does **not** invoke the selected chat or embeddi
 
 Each selected usage is stored as one row in `rag_model_assignments`, with `usage_type` as the
 primary key. The backend resolves a model by that exact usage and ignores an unassigned or
-disabled connection. Current indexing and search do not invoke a model yet; saving a selection
-does not start an AI workflow.
+disabled connection. When `EMBEDDING` is configured, new indexing and `/api/search` invoke that
+model. `POST /api/chat/ask` uses `CHAT` for ordinary chat and `ANSWER` for document questions;
+either purpose falls back to the other when its preferred assignment is absent or disabled.
 
 ### Server setup and provider presets
 
@@ -852,6 +870,7 @@ Status: `200 OK`. Returns an array; when no connections exist it returns `[]`.
     "apiBaseUrl": "https://api.openai.com/v1",
     "enabled": true,
     "hasApiKey": true,
+    "apiKey": "provider-secret-key",
     "createdAt": "2026-11-02T08:00:00Z",
     "updatedAt": "2026-11-02T08:00:00Z"
   }
@@ -875,18 +894,18 @@ Content-Type: application/json
 }
 ```
 
-Status: `201 Created`; response is one connection object in the same safe shape as the list.
+Status: `201 Created`; response is one connection object in the same shape as the list.
 The request fields are:
 
 | Field | Required on create | Frontend meaning |
 | --- | --- | --- |
 | `name` | Yes | Connection name; 1–100 characters after trimming. |
 | `provider` | Yes | One of the codes from `GET /api/admin/model-providers`; use `CLOUDFLARE` for Workers AI. |
-| `apiKey` | Yes, except `OLLAMA` | Provider API key or Cloudflare Workers AI API token. Never returned by the API. |
+| `apiKey` | Yes, except `OLLAMA` | Provider API key or Cloudflare Workers AI API token. The list, create, and update responses return this value for the edit form. |
 | `accountId` | For `CLOUDFLARE` | Cloudflare Account ID. For other providers, optional metadata; maximum 200 characters. |
 | `apiBaseUrl` | No | Optional HTTP(S) base URL; maximum 500 characters. Cloudflare's official URL is derived from `accountId` if omitted. |
 | `usageType` | For `CLOUDFLARE` | One code from `GET /api/admin/model-usage-types`, such as `ANSWER` or `EMBEDDING`. |
-| `modelId` | For `CLOUDFLARE` | Exact model identifier, such as `@cf/meta/llama-3.1-8b-instruct`; 1–200 characters after trimming. |
+| `modelId` | For `CLOUDFLARE` | Exact active model identifier, such as `@cf/meta/llama-3.1-8b-instruct-fast`; 1–200 characters after trimming. |
 | `enabled` | No | Defaults to `true`; must be enabled when saving a model ID in the same request. |
 
 For other providers, `usageType` and `modelId` may also be sent together when creating a
@@ -904,10 +923,14 @@ the model list comes from the account's Workers AI model search API. If `apiBase
 the backend resolves the model for future calls with
 `https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/v1`. A custom `apiBaseUrl` is
 stored for future inference calls, while catalog discovery still uses Cloudflare's official
-account endpoint. Use model IDs such as `@cf/meta/llama-3.1-8b-instruct` for chat or an
-appropriate `@cf/...` embedding model. The account ID can contain letters, digits, `_`, and `-`.
-See [Cloudflare's OpenAI-compatible API](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/)
-and [model search API](https://developers.cloudflare.com/api/resources/ai/subresources/models/methods/list/).
+account endpoint. Use an active chat-capable model ID such as
+`@cf/meta/llama-3.1-8b-instruct-fast` for chat or an appropriate `@cf/...` embedding model.
+The older `@cf/meta/llama-3.1-8b-instruct` example was deprecated; do not copy it into a new
+connection. Model availability can change, so verify the selected ID in Cloudflare's current
+model catalog. The account ID can contain letters, digits, `_`, and `-`.
+See [Cloudflare's OpenAI-compatible API](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/),
+[model search API](https://developers.cloudflare.com/api/resources/ai/subresources/models/methods/list/),
+and [model deprecation changelog](https://developers.cloudflare.com/changelog/product/workers-ai/).
 Do not persist the form's `apiKey` in browser storage.
 
 For the **Add Cloudflare model** form, show input fields for Account ID, API token, usage type,
@@ -927,11 +950,11 @@ Content-Type: application/json
   "accountId": "your-cloudflare-account-id",
   "apiKey": "your-workers-ai-api-token",
   "usageType": "ANSWER",
-  "modelId": "@cf/meta/llama-3.1-8b-instruct"
+  "modelId": "@cf/meta/llama-3.1-8b-instruct-fast"
 }
 ```
 
-Status: `201 Created`. The response is the safe connection object above, without `apiKey`.
+Status: `201 Created`. The response is the connection object above, including `apiKey`.
 The selected model ID is stored in `rag_model_assignments.model_id` under `usage_type=ANSWER`;
 the connection response does not contain `modelId` or `usageType`. Call
 `GET /api/admin/model-assignments` to display it after creation. If the type already has
@@ -943,12 +966,18 @@ change its model ID; the connection update endpoint edits connection settings on
 ```shell
 curl -X POST http://localhost:8080/api/admin/model-connections \
   -H 'Authorization: Bearer session-token' -H 'Content-Type: application/json' \
-  -d '{"name":"Cloudflare Workers AI","provider":"CLOUDFLARE","accountId":"your-cloudflare-account-id","apiKey":"your-workers-ai-api-token","usageType":"ANSWER","modelId":"@cf/meta/llama-3.1-8b-instruct"}'
+  -d '{"name":"Cloudflare Workers AI","provider":"CLOUDFLARE","accountId":"your-cloudflare-account-id","apiKey":"your-workers-ai-api-token","usageType":"ANSWER","modelId":"@cf/meta/llama-3.1-8b-instruct-fast"}'
 ```
+
+When Edit is opened, use the selected row from `GET /api/admin/model-connections` to prefill
+the form. `apiKey` is returned as the saved plaintext value; render it in a password input
+(`type="password"`) so it is masked on the page. For a connection without a key, `apiKey` is
+`null`. If a stored key cannot be decrypted, the list request returns `503` with an `error`.
+Do not put the key in browser storage, URLs, analytics, or console logs.
 
 Edit an existing connection using `PUT /api/admin/model-connections/{id}` with the connection
 fields from the JSON example; `usageType` and `modelId` are only used on creation. Status:
-`200 OK`; the response is the updated safe connection object. Send `apiKey: null`
+`200 OK`; the response is the updated connection object including `apiKey`. Send `apiKey: null`
 or omit it to retain the stored key. Send a new key to replace it. If `enabled` is omitted on
 update, its previous value is retained. The `provider` must remain the original provider;
 create a new connection to switch providers. Omitting `accountId` or `apiBaseUrl` on update
@@ -1158,11 +1187,347 @@ curl -X PUT http://localhost:8080/api/admin/model-assignments/ANSWER \
   -d '{"connectionId":"3e246d55-2b69-4e13-88bb-8e31dd479e7d","modelId":"provider-model-id"}'
 ```
 
-## Keyword Search API
+## Chat and Document Answer API
+
+### Frontend conversation flow
+
+The chat page supports multiple independent conversations. The frontend owns the **currently selected
+conversation ID**; the backend owns its message history. Send the ID on every question, including
+follow-up questions. Do not send prior messages in the request.
+
+| User action | Frontend request | What to do with the response |
+| --- | --- | --- |
+| Open chat page or refresh | `GET /api/chat/conversations` | Render the returned conversations, newest `updatedAt` first. Keep the selected ID if it still exists; otherwise select one or show an empty chat. |
+| Click **New chat** | `POST /api/chat/conversations` with bearer token and no body | Save the returned `conversationId` as the active ID and clear the displayed messages. This creates an empty conversation; it does not send a question. |
+| Send a question | `POST /api/chat/ask/stream` (or `/api/chat/ask`) with `question` and the active `conversationId` | Append the answer and optional sources to the active conversation. Refresh the conversation list if you show recent activity. |
+| Select an existing conversation | `GET /api/chat/conversations/{conversationId}/messages/page?page=0&size=20` | Render the first page of saved turns and load more pages as needed. Pass this ID with subsequent questions. |
+| Inspect a wrong answer | `GET /api/chat/conversations/{conversationId}/traces?page=0&size=20` | Show the route, retrieval query, candidate judgments, timings, and error for each recent question. Match live status events using `requestId`. |
+| Delete a conversation | `DELETE /api/chat/conversations/{conversationId}` | Remove it from the list. If it was active, clear its messages and select another conversation or show the empty state. |
+
+All chat endpoints require `Authorization: Bearer <accessToken>`. A conversation belongs to the
+authenticated user: IDs belonging to another user or no longer present cannot be read, used for
+questions, or deleted. On `400`, show the returned `error` and refresh the list because the
+conversation may have expired or been deleted. On `401`, return to login. A client should not
+invent an ID; always use one returned by `POST /api/chat/conversations` or the list endpoint.
+
+```http
+POST /api/chat/conversations
+Authorization: Bearer <accessToken>
+
+HTTP/1.1 201 Created
+Content-Type: application/json
+
+{"conversationId":"df6a1786-54c1-4dd5-849e-5c362997a26e","updatedAt":"2026-11-14T08:30:00Z"}
+```
+
+`GET /api/chat/conversations` returns `200 OK` and an array of the same objects, or `[]`.
+`updatedAt` is an ISO 8601 UTC timestamp, set when the conversation is created and updated
+after each completed answer. Use the ID as the stable list key; the API does not currently
+provide a title. `GET /api/chat/conversations/{conversationId}/messages` returns `200 OK` and
+an array in oldest-to-newest order, for example:
+
+```json
+[{"question":"李二龙是谁？","answer":"李二龙是一名 Java 开发工程师。[1]"}]
+```
+
+`GET /api/chat/conversations/{conversationId}/messages` remains the recent-turn response
+for existing clients. For full history within the conversation's lifetime, use
+`GET /api/chat/conversations/{conversationId}/messages/page?page=0&size=20`. It returns
+`{"items":[{"question":"...","answer":"..."}],"page":0,"size":20,"totalElements":12,"totalPages":1}`
+in oldest-to-newest order. `page` starts at `0`; `size` must be `1`–`100`. Use `totalElements`
+to show the exact number of completed turns and request further pages. Older turns saved before
+the archive feature was added cannot be reconstructed if they were already trimmed.
+
+History endpoints return completed question/answer pairs, not source cards or partial stream
+tokens. Keep sources from the live response if they need to remain visible while the page stays
+open. `DELETE /api/chat/conversations/{conversationId}` returns `204 No Content` and removes
+the conversation, its turns, and its execution traces. A newly created conversation has no
+messages. The backend retains all completed turns in a paged archive for the conversation's
+24-hour inactivity lifetime; it sends only the latest 10 to the model by default. A completed
+turn refreshes the archive TTL. `CHAT_HISTORY_MAX_TURNS` controls the model's recent context
+window, and `CHAT_HISTORY_TTL` controls expiration. The frontend can rebuild the message list
+after a refresh by paging through the archive; it need not persist conversation messages.
+
+`GET /api/chat/conversations/{conversationId}/traces?page=0&size=20` uses the same page format
+and returns up to the latest 100 execution traces for that conversation, newest first. Each item has
+`requestId`, `question`, `status` (`COMPLETED` or `FAILED`), `startedAt`, `finishedAt`, `steps`,
+and `error` (null on success). `steps[]` contains the same status details as the live stream,
+including `elapsedMs` since request start and `durationMs` since the preceding step. This
+lets the page show a compact progress list and an expandable troubleshooting view. Traces
+expire with the active conversation. This endpoint never returns model credentials or the
+full model prompts.
+
+For compatibility, an ask request without `conversationId` still uses the old implicit
+per-user history, which does not appear in `GET /api/chat/conversations`. The chat page should
+always create or select an explicit conversation before sending a question.
 
 ### Where the frontend uses it
 
-This endpoint searches the **content of indexed documents**. It is useful in these frontend flows:
+Use `POST /api/chat/ask` for two conversation flows:
+
+| Page or action | Request | Backend behavior | Frontend display |
+| --- | --- | --- | --- |
+| Ordinary chat, including greetings such as “你好” | Send `question`; explicit `mode: "CHAT"` can be used to rule out document search. | The backend routes to general chat or relevant conversation history. | Show `answer`; `sources` is `[]`. |
+| Question over indexed documents | Send `question`; `mode: "DOCUMENT"` is optional. Do not send `documentId`. | The backend decides whether this question needs documents, history, both, or neither. For a document route, it finds candidate files from their descriptions, selects relevant files, then searches their chunks. | Show `answer` and source cards when document evidence was selected. |
+| Question about one selected document | Send `question` and that document's `documentId`. | If routed to document search, retrieval is restricted to that document. | Show the answer and selected source cards. |
+
+For model-generated answers, the administrator must have at least one enabled `CHAT` or `ANSWER`
+model assignment. When routing selects document evidence, retrieval uses keyword matching and
+adds semantic retrieval when `EMBEDDING` is configured. Both chat endpoints store completed turns in Redis under the
+authenticated user and supplied conversation ID. The frontend sends the current `question`,
+active `conversationId`, and bearer token; it does not send prior messages. Before answering,
+the backend reads the selected conversation's retained turns and asks the configured `ROUTING`
+model to choose `GENERAL`, `HISTORY`, `DOCUMENT`, or `BOTH`. If `ROUTING` is not assigned, the
+selected `ANSWER`/`CHAT` model performs this routing step. A configured `ROUTING` assignment is
+used for every question. `mode: "CHAT"` forbids document search but still permits history.
+The frontend does not choose the route.
+The router returns a structured decision with `route`, `searchQuery`, `reason`, and optional
+`documentHint`. For document routes, `searchQuery` drives file-level and chunk-level search. When the question
+explicitly names a filename including its extension, `documentHint` checks saved filenames
+using an indexed exact match; a single matching
+document narrows ES to that document ID. An explicit `documentId` supplied by the frontend
+takes precedence. Otherwise, ES searches one summary profile per uploaded file and returns at
+most five candidate files. The routing model reads those file descriptions and chooses up to
+three relevant document IDs with a reason for each decision. Keyword and, when configured,
+vector chunk retrieval run only inside those selected files. File descriptions are never
+treated as answer evidence; the final answer uses accepted chunks.
+
+Older documents without summary profiles can still be found through a fallback chunk search
+when no suitable profile is selected or the selected files yield no accepted passage. Once
+existing files are uploaded again, they gain profiles and use the narrower path. Reupload with
+the same `documentId` replaces the old chunk generation and its profile; deletion removes both.
+
+For `HISTORY`, the latest context turns and the **exact archived total turn count** are passed
+to the answer model as conversation evidence; ES is not called. A question such as
+“我上边问了几个问题？” can therefore use the total, even when it exceeds the context window.
+For `DOCUMENT`, the backend selects files, searches their chunks, and sends only passages
+accepted by the relevance check.
+For `BOTH`, it selects related turns and searches ES using the router's standalone
+`searchQuery`; the final answer model receives the **original user question**, selected
+history, and accepted document passages. `GENERAL` sends neither history nor document text.
+The answer model is instructed to use prior turns only for conversation facts or references,
+not as proof that a document contains a claim. A failed routing or relevance check
+returns `502` rather than guessing a route or accepting uncertain evidence.
+
+`rag.chat.history-max-turns` in `application.yml` defaults to `10` and can be set through
+`CHAT_HISTORY_MAX_TURNS`. `rag.chat.history-ttl` defaults to `24h` and can be set through
+`CHAT_HISTORY_TTL`. The backend sends at most that many completed question/answer pairs to the
+model; the paged archive retains all completed turns until expiry. A successful turn refreshes
+the TTL; failed or interrupted turns are not saved as conversation messages.
+Different conversation IDs have independent histories, even for the same user. The frontend
+should provide New chat and conversation switching controls.
+
+Only questions routed to `DOCUMENT` or `BOTH` search ES. If no passages are accepted, the
+answer model receives no document context and the API returns `sources: []`. The model is instructed not to guess
+private facts such as a person's resume when no document evidence exists. There are no
+hard-coded responses for greetings and assistant-identity questions.
+When ES returns candidates, the backend asks the selected chat model to judge each individual
+passages that directly help answer the current question. Passages about a different subject are
+excluded. Each judgment records an accepted/rejected decision and a short reason. Only selected
+passages appear in `sources` and in the answer prompt. If none are
+selected, the answer model receives no document text. This selection is model-based and can
+still make mistakes; the frontend should render `sources` so users can inspect the evidence.
+This extra model request can add latency and cost. A failed relevance check returns `502` rather
+than treating the candidates as relevant.
+
+For the frontend: the main question box sends `question` and the active `conversationId`;
+the backend decides whether to search documents. Use `documentId` only for an explicit "ask this document" feature.
+If the UI offers a separate general-chat action, send `mode: "CHAT"` explicitly. In document
+mode, optionally provide a `topK` control. `temperature` and `maxTokens` apply to both modes. Disable Send while
+the request is running. On `200`, display `answer`; in document mode render each `sources[]` item
+with its file name, available page/section, and passage text.
+
+```http
+POST /api/chat/ask
+Authorization: Bearer <accessToken>
+Content-Type: application/json
+
+{"question":"What is the access policy?","conversationId":"df6a1786-54c1-4dd5-849e-5c362997a26e","mode":"DOCUMENT","documentId":"company-handbook","topK":5,"temperature":0.2,"maxTokens":1024}
+```
+
+| Field | Required | Default | Constraint |
+| --- | --- | --- | --- |
+| `question` | Yes | — | Non-blank, at most 2,000 characters after trimming. |
+| `conversationId` | For the conversation UI | Legacy implicit per-user history if omitted | UUID returned by the new-conversation or list endpoint. Must belong to the authenticated user. Pass the same ID for every turn of that conversation. |
+| `mode` | No | `DOCUMENT` | `DOCUMENT` allows automatic routing to document search, history, both, or general chat. `CHAT` prevents document search but still allows history. |
+| `documentId` | No | All documents | Exact document ID; at most 200 characters. Used only in `DOCUMENT` mode. |
+| `topK` | No | `5` | Number of passages in `DOCUMENT` mode, `1`–`10`. |
+| `temperature` | No | `0.2` | Sampling value, `0`–`2`. |
+| `maxTokens` | No | `1024` | Maximum answer tokens, `1`–`4096`. |
+
+Status: `200 OK`. In `CHAT` mode, `sources` is `[]`. In `DOCUMENT` mode, `sources` contains the
+accepted document passages in citation order. The model is instructed to use relevant document
+facts first, cite their source numbers, and distinguish any general-knowledge answer from document
+content. The model may decide the retrieved candidates do not answer the question; do not present
+every returned candidate as an actually cited source. The model receives
+at most the first 1,500 characters of each passage; the response contains each full passage.
+For retrieval, only the first 500 characters of `question` are used, while the model receives
+the full question. Use `fileName`, `documentId`, `chunkIndex`, and `sourceReferences` to render
+source cards. Display `answer` as text; citation markers such as `[1]` refer to the corresponding
+one-based position in `sources`. The backend asks the model to cite sources, but does not verify
+that every claim has a citation. The API does not provide source-file download or page-opening
+links, so show source locations as labels unless the frontend has its own viewer.
+
+```json
+{
+  "answer": "The policy requires staff approval before access is granted. [1]",
+  "sources": [
+    {
+      "documentId": "company-handbook", "ingestionId": "ing-1",
+      "fileName": "handbook.pdf", "documentType": "PDF", "chunkIndex": 4,
+      "content": "Staff need approval before access is granted.",
+      "startOffset": 1200, "endOffset": 1244,
+      "sourceReferences": [{"pageNumber":3,"slideNumber":null,"sheetName":null,
+        "sectionTitle":null,"elementType":"PAGE","sourceUrl":null,
+        "sourceTitle":null,"webPageNumber":null}],
+      "score": 0.87
+    }
+  ]
+}
+```
+
+When a document route finds no passages, the backend still calls the selected
+answer model for a general response and returns `sources: []`. The prompt tells the model to
+avoid claiming document support and to say when it does not know. Prompt instructions reduce
+unsupported claims but cannot guarantee factual accuracy. Retrieval or provider errors return
+an error rather than silently falling back. Handle failures as follows:
+
+| Status | Meaning | Frontend action |
+| --- | --- | --- |
+| `400` | Missing or invalid question or parameter, or unknown/expired conversation ID. | Preserve the entered question and show `error`; refresh the conversation list if its ID is invalid. |
+| `401` | Login session missing or expired. | Return to login. |
+| `502` | Embedding, Elasticsearch retrieval, or chat provider failed. For chat provider HTTP errors, `error` includes the upstream status and a short reason: `400` invalid request or model capability, `401`/`403` token or permission, `404` account URL or model, `410` retired model, `429` rate limit or quota. | Keep the question and show `error`; offer Retry for transient failures. For `410`, direct the administrator to select an active model ID. |
+| `503` | Neither `CHAT` nor `ANSWER` resolves to an enabled model, or the selected model credential cannot be decrypted. | Preserve the backend `error` message; tell the administrator to check the assignments, enabled connection, and server encryption key. |
+
+Only Cloudflare
+Workers AI, OpenAI, DeepSeek, and Alibaba Cloud Model Studio compatible chat endpoints are
+currently supported by the answer client.
+
+```javascript
+const response = await fetch("/api/chat/ask", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ question, conversationId: activeConversationId, mode: "DOCUMENT", documentId: selectedDocumentId || null }),
+});
+const data = await response.json();
+if (!response.ok) throw new Error(data.error ?? "Question could not be answered");
+// Render data.answer as text and data.sources as source cards.
+```
+
+```shell
+curl -X POST http://localhost:8080/api/chat/ask \
+  -H 'Authorization: Bearer session-token' -H 'Content-Type: application/json' \
+  -d '{"question":"What is the access policy?","conversationId":"df6a1786-54c1-4dd5-849e-5c362997a26e","mode":"DOCUMENT","topK":5}'
+```
+
+For ordinary chat, send `{"question":"你好","mode":"CHAT","conversationId":"<active-id>"}`. For a RAG question across
+all documents, send `{"question":"请总结李二龙的简历","conversationId":"<active-id>"}`; no `documentId` is needed. Display
+`answer` and any `sources` returned. A follow-up can still send only its latest question:
+`{"question":"他做过什么？","conversationId":"<same-active-id>"}`. The backend resolves the reference using that conversation's recent turns.
+
+### Stream the answer and show progress
+
+`POST /api/chat/ask/stream` accepts the **same JSON request** and bearer token as
+`POST /api/chat/ask`. It responds with `Content-Type: text/event-stream`. Use this endpoint
+for the main conversation UI. The existing synchronous endpoint remains available for callers
+that need one JSON response.
+
+The stream sends named SSE events in execution order. `status` events describe completed
+decisions or the step now running; document-only steps are omitted for other routes:
+
+| Event | Example `data` JSON | Frontend behavior |
+| --- | --- | --- |
+| `status` | `{"step":"started","message":"Preparing question"}` | Show immediate progress and keep this event's `requestId` for diagnostics. |
+| `status` | `{"step":"history_loaded","message":"Loaded conversation history","turnCount":2,"totalTurns":12}` | Show context-window count and total completed turns. |
+| `status` | `{"step":"routing","message":"Choosing evidence sources"}` | Show that source selection is running. |
+| `status` | `{"step":"route_selected","message":"Selected evidence sources","route":"BOTH","routingModelPurpose":"ROUTING","reason":"Needs prior subject and document facts","searchQuery":"李二龙有哪些项目？"}` | Show the route, router's reason, and actual retrieval query. |
+| `status` | `{"step":"history_selected","message":"Selected relevant history","turnCount":1,"decisions":[{"question":"李二龙是谁？","answer":"李二龙是一名 Java 工程师。","accepted":true,"reason":"Resolves the subject"}]}` | Present only for `HISTORY` or `BOTH`; shows prior turns considered, a bounded answer excerpt, whether each turn was selected, and why. |
+| `status` | `{"step":"document_filter","message":"Checked document titles","hint":"resume.pdf","matchCount":1,"applied":true}` | Present when the router identifies an explicit filename; shows whether ES was narrowed. `matchCount` is capped at 2 because only uniqueness matters. |
+| `status` | `{"step":"document_profiles","message":"Found candidate documents","candidateCount":2,"candidates":[{"documentId":"resume","fileName":"resume.pdf","summary":"Java resume...","score":2.1}]}` | Show file-level matches from the summary index. Skipped when an exact document ID is already known. |
+| `status` | `{"step":"document_selection","message":"Selected documents from summaries","selectedCount":1,"fallback":false,"decisions":[{"documentId":"resume","fileName":"resume.pdf","accepted":true,"reason":"Matches the requested person"}]}` | Show which files the routing model chose and why. `fallback: true` means the backend will search chunks across the index for older or unmatched files. |
+| `status` | `{"step":"searching","message":"Searching documents","query":"李二龙做过什么？","documentScope":["resume"]}` | Show the actual chunk query and selected document IDs. An empty scope means the legacy fallback search. |
+| `status` | `{"step":"retrieved","message":"Found document candidates","candidateCount":5,"candidates":[{"documentId":"resume","fileName":"resume.pdf","chunkIndex":2,"score":0.87,"contentPreview":"Worked on Java payment services..."}]}` | Show chunk candidates before relevance filtering. `contentPreview` is limited to 500 characters; `evidence_selected` later gives each candidate's decision and reason. |
+| `status` | `{"step":"document_fallback","message":"No selected document passage answered the question; checking remaining chunks","reason":"Selected document summaries did not yield accepted evidence"}` | Present only when a scoped search found no accepted passage; the backend then checks the broader chunk index. |
+| `status` | `{"step":"evidence_selected","message":"Selected document evidence","sourceCount":1,"decisions":[{"documentId":"resume","fileName":"resume.pdf","chunkIndex":2,"accepted":true,"reason":"Contains the requested experience"}]}` | Show each candidate's accepted/rejected decision and reason. |
+| `sources` | `[{"documentId":"...","fileName":"resume.pdf", ...}]` | Render only accepted document passages; an empty array means no document evidence was used. |
+| `status` | `{"step":"generating","message":"Generating answer","sourceCount":2}` | Switch the indicator to answer generation. |
+| `token` | `{"text":"李二龙"}` | Append `text` to the visible answer as it arrives. Do not replace prior text. |
+| `status` | `{"step":"answer_generated","message":"Answer generated","answerLength":128}` | Model generation finished; `durationMs` on this event measures generation time. |
+| `done` | `{}` | Mark the turn complete and stop the loading indicator. |
+| `error` | `{"message":"..."}` | Stop loading, preserve any partial answer, and offer Retry. This may occur after HTTP 200 because the stream has already started. |
+
+Every `status` event also includes a `requestId`, `elapsedMs`, and `durationMs`. Use `requestId`
+to find the corresponding saved trace. `durationMs` measures time since the preceding status
+event, so it is a diagnostic approximation for the intervening operation; it is not a provider
+billing metric. `done` means the answer and trace have both been saved.
+
+After file selection, chunk retrieval runs ES keyword matching and, when `EMBEDDING` is configured,
+also runs vector similarity search. It merges both ranked lists, removes duplicate chunks, and
+returns a bounded set of candidates for relevance checking; the final `sources` list contains
+at most `topK` accepted passages. Vector-only hits with ES score below `0.8` are discarded
+for answer generation; this is a conservative heuristic on the index's default cosine score,
+not a guarantee that higher-scoring passages answer the question. Keyword matching can find exact names even when semantic
+similarity ranks them poorly. The keyword query is ES `match`, so it is tokenized full-text
+matching, not a byte-for-byte exact filter. Without `EMBEDDING`, the keyword results are used
+alone. Retrieval failures produce `error`; they are not treated as zero matches.
+The `sources` event contains only passages accepted by the relevance check. A `GENERAL` or
+`HISTORY` route skips all file-level and chunk-level retrieval statuses.
+
+Because the endpoint is a **POST with bearer authorization**, use `fetch()` and parse its
+response body as SSE. Browser `EventSource` cannot directly send this JSON POST request. Decode
+chunks with a streaming `TextDecoder`, buffer incomplete lines/events across chunks, parse each
+`data:` JSON value, and dispatch by the `event:` name. Cancel the reader when the user cancels
+the turn. A new question starts a new request; completed turns are saved by the backend.
+
+```javascript
+const controller = new AbortController(); // Keep this for the Cancel button.
+const response = await fetch("/api/chat/ask/stream", {
+  method: "POST",
+  headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+  body: JSON.stringify({ question, conversationId: activeConversationId }),
+  signal: controller.signal,
+});
+if (!response.ok) throw new Error((await response.json()).error ?? "Chat failed");
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+let pending = "";
+while (true) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  pending += decoder.decode(value, { stream: true });
+  const frames = pending.split(/\r?\n\r?\n/);
+  pending = frames.pop();
+  for (const frame of frames) {
+    const event = frame.match(/^event: (.+)$/m)?.[1];
+    const raw = frame.match(/^data: (.+)$/m)?.[1];
+    if (!event || !raw) continue;
+    const data = JSON.parse(raw);
+    if (event === "status") showProgress(data.step, data.message);
+    if (event === "sources") showCandidateSources(data);
+    if (event === "token") appendAnswer(data.text);
+    if (event === "error") throw new Error(data.message);
+    if (event === "done") finishAnswer();
+  }
+}
+// To cancel: controller.abort(). Handle AbortError without showing a failure toast.
+```
+
+```shell
+curl -N -X POST http://localhost:8080/api/chat/ask/stream \
+  -H 'Authorization: Bearer session-token' -H 'Content-Type: application/json' \
+  -d '{"question":"请总结李二龙的简历","conversationId":"df6a1786-54c1-4dd5-849e-5c362997a26e"}'
+```
+
+## Document Passage Search API
+
+### Where the frontend uses it
+
+This endpoint searches the **content of indexed documents**. With an enabled `EMBEDDING` model,
+it embeds the query and runs vector similarity search; otherwise it uses keyword matching.
+It is useful in these frontend flows:
 
 | Frontend location | When to call | Parameters | What to show |
 | --- | --- | --- | --- |
@@ -1177,17 +1542,25 @@ changes. An application may debounce an interactive search box, but should avoid
 intermediate keystroke. Upload, indexing, document listing, and metadata views do not need to
 call this endpoint unless they offer a passage-search action.
 
-This endpoint returns evidence only. It does not generate an answer or call a language model. A
-future question-answering UI should call its dedicated answer endpoint when one exists; this
-endpoint can still support a separate "find source passages" view. There is currently no endpoint
+This endpoint returns evidence only. It does not generate an answer. A question-answering UI
+should call `POST /api/chat/ask`; this endpoint can support a separate "find source passages"
+view. There is currently no endpoint
 that downloads an indexed source file or opens it at a page number, so the frontend should display
 source locations as labels unless it has its own document viewer. A `sourceUrl` from a web import
 can be offered as an external link.
 
 ### Request
 
-Searches the `content` field of indexed chunks using Elasticsearch relevance scoring. Results
-include complete chunk text and source references. The optional `documentId` filter is an exact
+When `EMBEDDING` is configured, this endpoint calls the configured model once for the query
+and searches indexed chunk vectors with the same model identity. New document and web-page
+ingestions call that model once per chunk and store each vector in Elasticsearch. A disabled or
+unassigned `EMBEDDING` connection leaves the existing keyword behavior in place. Existing
+documents indexed before this feature have no vectors: re-index them to include them in semantic
+results. Changing the embedding model also requires re-indexing documents; vectors from a
+different model are filtered out. The vector dimension is inferred from the first indexed
+vector, so changing to a model with another dimension requires a new Elasticsearch index.
+
+Results include complete chunk text and source references. The optional `documentId` filter is an exact
 logical document ID, such as one returned by `GET /api/documents` or an indexing response. The
 request has no body; URL-encode query parameters and send the login token in the `Authorization`
 header.
@@ -1258,7 +1631,8 @@ Status: `200 OK`
 }
 ```
 
-Results are ordered by Elasticsearch relevance score. Render each `items[]` entry as one result
+Results are ordered by Elasticsearch relevance score (vector similarity when embeddings are
+configured, keyword relevance otherwise). Render each `items[]` entry as one result
 card or row:
 
 | Response field | Suggested frontend use |
@@ -1297,14 +1671,16 @@ indexed before its passages can appear in search.
 | --- | --- | --- |
 | `400 Bad Request` | Blank or overlong `query`, invalid `page` or `size`, overlong `documentId`, or a page beyond the 10,000-result window. | Keep the entered text, show `error`, and let the user correct the search or return to an earlier page. |
 | `401 Unauthorized` | Missing, invalid, expired, or disabled-user bearer session. | Send the user through the application's login flow. |
-| `502 Bad Gateway` | Elasticsearch could not complete the search. | Show a temporary search failure and allow retry. Do not present it as zero matches. |
+| `502 Bad Gateway` | The embedding provider or Elasticsearch could not complete the search. | Show a temporary search failure and allow retry. Do not present it as zero matches. |
 
 Examples of the common error response are `{"error":"query must not be blank"}` for `400`,
 `{"error":"Authentication is required"}` for `401`, and
 `{"error":"The search index could not be queried"}` for `502`.
 
-Search currently matches indexed text by keywords. Alternate wording with no matching terms may
-return no hits; this endpoint does not perform semantic or vector search.
+When embedding generation or Elasticsearch vector search fails, the endpoint returns `502`
+with `{"error":"..."}`. The frontend should offer retry and should not show the failure as an
+empty result. Cloudflare Workers AI, OpenAI, and Alibaba Cloud Model Studio compatible
+embedding endpoints are currently supported for inference.
 
 ```shell
 curl -G http://localhost:8080/api/search \
